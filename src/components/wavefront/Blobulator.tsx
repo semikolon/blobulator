@@ -32,15 +32,15 @@ const CLUSTERS = [
 ];
 
 // Color blending configuration
-const COLOR_BLEND_RADIUS = 60;      // Pixels - only very close blobs influence each other
-const COLOR_BLEND_STRENGTH = 0.35;  // 0-1 - subtle blending, preserves cluster identity
-const COLOR_BLEND_MIN_AGE = 5000;   // ms - blobs must be 5s old before blending (stay distinct longer)
+const COLOR_BLEND_RADIUS = 80;      // Pixels - blobs within this distance blend colors
+const COLOR_BLEND_STRENGTH = 0.5;   // 0-1 - more blending for smoother color transitions
+const COLOR_BLEND_MIN_AGE = 3000;   // ms - start blending sooner
 
-// Cluster color palettes - harmonious but distinct
+// Cluster color palettes - weighted toward purple/pink
 const CLUSTER_HUE_RANGES = [
-  { base: 280, spread: 20 },   // Cluster 0: Purple/violet
-  { base: 330, spread: 20 },   // Cluster 1: Pink/magenta
-  { base: 15, spread: 20 },    // Cluster 2: Coral/orange (closer to pink)
+  { base: 275, spread: 25 },   // Cluster 0: Purple/violet
+  { base: 320, spread: 25 },   // Cluster 1: Pink/magenta
+  { base: 345, spread: 25 },   // Cluster 2: Warm pink/coral (NOT orange)
 ];
 
 // Get cluster index from blob ID (uses random part for even distribution)
