@@ -12,7 +12,7 @@
  */
 
 import { useState, useEffect, useRef, useCallback } from 'react';
-import type { WaveFrontBlob, BlobFieldConfig } from './types';
+import type { WaveFrontBlob, BlobFieldConfig, AnimationMode } from './types';
 import { DEFAULT_CONFIG } from './types';
 import {
   generateInitialBlobs,
@@ -21,12 +21,18 @@ import {
   updateBlobVelocity,
   recycleBlobsAtEdge,
 } from './physics';
-// Drift mode imports preserved for future use
-// import { applyDriftToBlobs, getSizeBreathingMultiplier } from './drift';
+import { applyDriftToBlobs, getSizeBreathingMultiplier } from './drift';
 import { useAudio } from './useAudio';
 
-// Always use expanding mode for now - drift mode disabled
-// (Expanding mode is more sensitive to ambient music from speakers)
+// Threshold for switching between drift and expansion modes
+const AMPLITUDE_THRESHOLD = 0.03;
+
+// 3 Cluster configurations - different sizes and speeds
+const CLUSTERS = [
+  { sizeMultiplier: 0.7, speedMultiplier: 1.4, centerOffset: { x: -150, y: -100 } },  // Small & fast
+  { sizeMultiplier: 1.0, speedMultiplier: 1.0, centerOffset: { x: 0, y: 50 } },       // Medium & normal
+  { sizeMultiplier: 1.5, speedMultiplier: 0.6, centerOffset: { x: 180, y: -50 } },    // Large & slow
+];
 
 // Inline styles since we don't have Tailwind
 const styles = {
@@ -113,7 +119,7 @@ export function Blobulator() {
   const [blobs, setBlobs] = useState<WaveFrontBlob[]>([]);
   const [config] = useState<BlobFieldConfig>(DEFAULT_CONFIG);
   const [viewport, setViewport] = useState({ width: window.innerWidth, height: window.innerHeight });
-  // Always expanding mode - drift mode disabled for better music sensitivity
+  const [mode, setMode] = useState<AnimationMode>('expanding');
   const { isListening, error, features, startListening, stopListening } = useAudio();
 
   const animationRef = useRef<number | null>(null);
@@ -121,8 +127,16 @@ export function Blobulator() {
   const elapsedRef = useRef<number>(0);
   const lastFrameRef = useRef<number>(0);
 
-  // Mode switching disabled - always expanding for better music reactivity
-  // Drift mode code preserved in drift.ts for future use
+  // Switch between modes based on audio amplitude
+  useEffect(() => {
+    if (!isListening) {
+      setMode('expanding');
+    } else if (features.amplitude > AMPLITUDE_THRESHOLD) {
+      setMode('expanding');
+    } else {
+      setMode('drift');
+    }
+  }, [features.amplitude, isListening]);
 
   // Initialize blobs
   useEffect(() => {
@@ -140,7 +154,7 @@ export function Blobulator() {
     return () => window.removeEventListener('resize', handleResize);
   }, []);
 
-  // Animation loop - always expanding mode
+  // Animation loop - switches between expanding and drift modes
   const animate = useCallback((timestamp: number) => {
     const deltaMs = timestamp - lastFrameRef.current;
     lastFrameRef.current = timestamp;
@@ -149,27 +163,42 @@ export function Blobulator() {
     setBlobs(currentBlobs => {
       let updatedBlobs = [...currentBlobs];
 
-      // EXPANDING MODE: Active wavefront expansion
-      // Bass affects spawn rate (faster spawning on bass hits)
-      const spawnInterval = Math.max(
-        200,
-        config.spawnIntervalMs - features.bass * 400
-      );
+      if (mode === 'expanding') {
+        // EXPANDING MODE: Active wavefront expansion
+        // Bass affects spawn rate (faster spawning on bass hits)
+        const spawnInterval = Math.max(
+          200,
+          config.spawnIntervalMs - features.bass * 400
+        );
 
-      // Update existing blobs with physics
-      for (const blob of updatedBlobs) {
-        updateBlobVelocity(blob, config, elapsedRef.current, 0.8);
-        updateBlobPosition(blob);
-      }
+        // Mids affect speed - higher mids = faster movement
+        const midSpeedBoost = 1 + features.mid * 0.5;
 
-      // Spawn new blobs from frontier
-      if (elapsedRef.current - lastSpawnRef.current > spawnInterval) {
-        const frontier = updatedBlobs.filter(b => b.isFrontier);
-        if (frontier.length > 0) {
-          const newBlobs = spawnFromFrontier(frontier, config);
-          updatedBlobs = [...updatedBlobs, ...newBlobs];
+        // Update existing blobs with physics
+        for (const blob of updatedBlobs) {
+          const cluster = CLUSTERS[blob.id.charCodeAt(0) % 3];
+          updateBlobVelocity(blob, config, elapsedRef.current, 0.8 * cluster.speedMultiplier * midSpeedBoost);
+          updateBlobPosition(blob);
         }
-        lastSpawnRef.current = elapsedRef.current;
+
+        // Spawn new blobs from frontier
+        if (elapsedRef.current - lastSpawnRef.current > spawnInterval) {
+          const frontier = updatedBlobs.filter(b => b.isFrontier);
+          if (frontier.length > 0) {
+            const newBlobs = spawnFromFrontier(frontier, config);
+            updatedBlobs = [...updatedBlobs, ...newBlobs];
+          }
+          lastSpawnRef.current = elapsedRef.current;
+        }
+      } else {
+        // DRIFT MODE: Calm ambient swirling (when audio is quiet)
+        updatedBlobs = applyDriftToBlobs(
+          updatedBlobs,
+          deltaMs,
+          elapsedRef.current,
+          viewport.width,
+          viewport.height
+        );
       }
 
       // Recycle blobs that have left the viewport
@@ -192,7 +221,7 @@ export function Blobulator() {
     });
 
     animationRef.current = requestAnimationFrame(animate);
-  }, [config, features, viewport]);
+  }, [config, features, viewport, mode]);
 
   // Start/stop animation
   useEffect(() => {
@@ -204,12 +233,30 @@ export function Blobulator() {
     };
   }, [animate]);
 
-  // Calculate display size with audio reactivity
-  const getDisplaySize = (blob: WaveFrontBlob) => {
-    const baseSize = blob.size;
-    // Subtle audio boost only - no massive growth multiplier!
-    const audioBoost = 1 + features.amplitude * 0.3;
-    return baseSize * audioBoost;
+  // Calculate display size with cluster variation and audio reactivity
+  const getDisplaySize = (blob: WaveFrontBlob, index: number) => {
+    // Assign blob to one of 3 clusters based on its ID
+    const clusterIndex = blob.id.charCodeAt(0) % 3;
+    const cluster = CLUSTERS[clusterIndex];
+
+    // Base size with cluster multiplier
+    const baseSize = blob.size * cluster.sizeMultiplier;
+
+    // Per-blob variation using index for uniqueness (±15%)
+    const blobVariation = 1 + Math.sin(index * 1.7) * 0.15;
+
+    // Amplitude affects all blobs (pulse effect)
+    const amplitudeBoost = 1 + features.amplitude * 0.4;
+
+    // Mids create subtle per-blob wobble (different phase per blob)
+    const midWobble = 1 + features.mid * 0.2 * Math.sin(elapsedRef.current * 0.003 + index * 0.5);
+
+    // Breathing effect in drift mode
+    const breathingMultiplier = mode === 'drift'
+      ? getSizeBreathingMultiplier(elapsedRef.current, index)
+      : 1;
+
+    return baseSize * blobVariation * amplitudeBoost * midWobble * breathingMultiplier;
   };
 
   // Dynamic color based on audio features
@@ -231,8 +278,10 @@ export function Blobulator() {
   const centerX = viewport.width / 2;
   const centerY = viewport.height / 2;
 
-  // Background color - dark neutral for expanding mode
-  const backgroundColor = '#18181b';
+  // Dynamic background color based on mode
+  const backgroundColor = mode === 'drift'
+    ? '#1a1525'  // Subtle purple tint for drift
+    : '#18181b'; // Dark neutral for expanding
 
   return (
     <div style={{ ...styles.container, backgroundColor }}>
@@ -278,7 +327,7 @@ export function Blobulator() {
         )}
 
         <p style={styles.stats}>
-          Blobs: {blobs.length} | Frontier: {blobs.filter(b => b.isFrontier).length}
+          {mode === 'drift' ? '🌊' : '💥'} {blobs.length} blobs | {blobs.filter(b => b.isFrontier).length} frontier
         </p>
       </div>
 
@@ -299,12 +348,12 @@ export function Blobulator() {
         </defs>
 
         <g filter="url(#goo)">
-          {blobs.map((blob) => (
+          {blobs.map((blob, index) => (
             <circle
               key={blob.id}
               cx={centerX + blob.x}
               cy={centerY + blob.y}
-              r={getDisplaySize(blob)}
+              r={getDisplaySize(blob, index)}
               fill={getDynamicColor(blob)}
             />
           ))}
