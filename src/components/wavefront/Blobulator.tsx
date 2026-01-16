@@ -25,7 +25,8 @@ import { applyDriftToBlobs, getSizeBreathingMultiplier } from './drift';
 import { useAudio } from './useAudio';
 
 // Threshold for switching between drift and expansion modes
-const AMPLITUDE_THRESHOLD = 0.15;
+// Lower = more sensitive (easier to trigger expanding mode)
+const AMPLITUDE_THRESHOLD = 0.03;
 
 // Inline styles since we don't have Tailwind
 const styles = {

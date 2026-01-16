@@ -37,25 +37,26 @@ export interface BlobFieldConfig {
   growthFactor: number;
 }
 
-// Settings from your screenshot
+// Settings tuned for nice multi-blob gooey metaball-merging expansion
+// From brf-auto WaveFrontTestMode slider settings
 export const DEFAULT_CONFIG: BlobFieldConfig = {
   baseSpeed: 2,
-  accelerationFactor: 1.0,        // From screenshot: 1.00
+  accelerationFactor: 3.0,        // Speed multiplier per generation
   baseBlobSize: 50,
   shrinkFactor: 0.85,
-  spawnIntervalMs: 600,           // From screenshot: 600ms
+  spawnIntervalMs: 600,           // How often new frontier blobs spawn
   spawnCountRange: [1, 1],
   spawnDistance: [8, 12],
   spawnDirectionOffset: 0.1,
   gooeyIntensity: 'strong',
-  useCurlNoise: true,             // From screenshot: ON
-  curlScale: 0.008,               // From screenshot: 0.0080
-  curlLerpFactor: 0.12,           // From screenshot: 0.12
-  curlTimeEvolution: 0.0003,      // From screenshot: 0.00030
+  useCurlNoise: true,             // Organic flow vs random
+  curlScale: 0.009,               // Lower = sweeping, higher = tight
+  curlLerpFactor: 0.02,           // Blend speed toward flow (LOW = preserves momentum!)
+  curlTimeEvolution: 0.0003,      // Flow field change rate
   curlBlobVariation: 0.02,
   positionJitter: 8,
   expansionEasing: 0.6,
-  growthFactor: 11.0,             // From screenshot: 11.0x
+  growthFactor: 15.0,             // Blob size multiplier at 100% progress
 };
 
 // Coral/pink palette from brf-auto
