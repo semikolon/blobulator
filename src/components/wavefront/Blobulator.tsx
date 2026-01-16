@@ -33,7 +33,8 @@ const CLUSTERS = [
 
 // Color blending configuration
 const COLOR_BLEND_RADIUS = 60;      // Pixels - only very close blobs influence each other
-const COLOR_BLEND_STRENGTH = 0.25;  // 0-1 - subtle blending, preserves cluster identity
+const COLOR_BLEND_STRENGTH = 0.35;  // 0-1 - subtle blending, preserves cluster identity
+const COLOR_BLEND_MIN_AGE = 2000;   // ms - blobs must be this old before they blend (avoids spawn pool infection)
 
 // Cluster color palettes - each cluster has its own hue range
 // Cluster 0 (small & fast): Purple to neon pink (270-320)
@@ -296,6 +297,11 @@ export function Blobulator() {
   const getDynamicColor = (blob: WaveFrontBlob, index: number) => {
     const baseColor = getBlobBaseHSL(blob);
 
+    // Skip blending for young blobs - prevents "infection" in spawn pool
+    if (blob.age < COLOR_BLEND_MIN_AGE) {
+      return `hsl(${baseColor.h}, ${baseColor.s}%, ${baseColor.l}%)`;
+    }
+
     // Find nearby blobs and calculate weighted color influence
     let totalWeight = 0;
     let weightedHue = 0;
@@ -306,6 +312,10 @@ export function Blobulator() {
       if (i === index) continue; // Skip self
 
       const other = blobs[i];
+
+      // Only blend with other mature blobs
+      if (other.age < COLOR_BLEND_MIN_AGE) continue;
+
       const dx = blob.x - other.x;
       const dy = blob.y - other.y;
       const distance = Math.sqrt(dx * dx + dy * dy);
