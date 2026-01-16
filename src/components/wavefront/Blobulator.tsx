@@ -32,8 +32,8 @@ const CLUSTERS = [
 ];
 
 // Color blending configuration
-const COLOR_BLEND_RADIUS = 100;     // Pixels - blobs within this distance influence each other
-const COLOR_BLEND_STRENGTH = 0.7;   // 0-1 - how much neighbors influence color (stronger = more noticeable)
+const COLOR_BLEND_RADIUS = 60;      // Pixels - only very close blobs influence each other
+const COLOR_BLEND_STRENGTH = 0.25;  // 0-1 - subtle blending, preserves cluster identity
 
 // Cluster color palettes - each cluster has its own hue range
 // Cluster 0 (small & fast): Purple to neon pink (270-320)
