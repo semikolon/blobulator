@@ -12,7 +12,7 @@
  */
 
 import { useState, useEffect, useRef, useCallback } from 'react';
-import type { WaveFrontBlob, BlobFieldConfig, AnimationMode } from './types';
+import type { WaveFrontBlob, BlobFieldConfig } from './types';
 import { DEFAULT_CONFIG } from './types';
 import {
   generateInitialBlobs,
@@ -22,10 +22,7 @@ import {
   recycleBlobsAtEdge,
 } from './physics';
 import { applyDriftToBlobs, getSizeBreathingMultiplier } from './drift';
-import { useAudio } from './useAudio';
-
-// Threshold for switching between drift and expansion modes
-const AMPLITUDE_THRESHOLD = 0.03;
+import { useAdaptiveAudio } from './useAdaptiveAudio';
 
 // 3 Cluster configurations - different sizes and speeds
 const CLUSTERS = [
@@ -119,24 +116,24 @@ export function Blobulator() {
   const [blobs, setBlobs] = useState<WaveFrontBlob[]>([]);
   const [config] = useState<BlobFieldConfig>(DEFAULT_CONFIG);
   const [viewport, setViewport] = useState({ width: window.innerWidth, height: window.innerHeight });
-  const [mode, setMode] = useState<AnimationMode>('expanding');
-  const { isListening, error, features, startListening, stopListening } = useAudio();
+  const {
+    isListening,
+    error,
+    features,
+    mode,
+    adaptiveThreshold,
+    stats,
+    startListening,
+    stopListening,
+  } = useAdaptiveAudio();
 
   const animationRef = useRef<number | null>(null);
   const lastSpawnRef = useRef<number>(0);
   const elapsedRef = useRef<number>(0);
   const lastFrameRef = useRef<number>(0);
 
-  // Switch between modes based on audio amplitude
-  useEffect(() => {
-    if (!isListening) {
-      setMode('expanding');
-    } else if (features.amplitude > AMPLITUDE_THRESHOLD) {
-      setMode('expanding');
-    } else {
-      setMode('drift');
-    }
-  }, [features.amplitude, isListening]);
+  // Mode is now managed by useAdaptiveAudio hook
+  // It auto-adjusts the threshold to achieve target drift ratio (~30%)
 
   // Initialize blobs
   useEffect(() => {
@@ -327,8 +324,13 @@ export function Blobulator() {
         )}
 
         <p style={styles.stats}>
-          {mode === 'drift' ? '🌊' : '💥'} {blobs.length} blobs | {blobs.filter(b => b.isFrontier).length} frontier
+          {mode === 'drift' ? '🌊' : '💥'} {blobs.length} blobs
         </p>
+        {isListening && (
+          <p style={{ ...styles.stats, fontSize: 10, marginTop: 4 }}>
+            Drift: {(stats.currentDriftRatio * 100).toFixed(0)}% (target 30%) | Thresh: {adaptiveThreshold.toFixed(3)}
+          </p>
+        )}
       </div>
 
       {/* Blob Visualization with Gooey SVG Filter */}

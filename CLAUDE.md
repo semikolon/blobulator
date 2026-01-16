@@ -20,8 +20,36 @@ Reference screenshots saved in `docs/reference-screenshots/baseline-v1-*.png`
 This configuration represents a validated aesthetic baseline. Future audio sensitivity tweaks should preserve this visual character.
 
 ### Animation Modes
-- **Expanding** (💥): Active wavefront expansion when audio amplitude > 0.03
+- **Expanding** (💥): Active wavefront expansion when audio amplitude exceeds adaptive threshold
 - **Drift** (🌊): Calm ambient swirling when quiet, with center gravity + breathing effect
+
+### Adaptive Audio System (January 2026)
+
+Self-calibrating audio interpretation that adjusts to any volume level or music style.
+
+**How it works:**
+1. Rolling 60-second window of amplitude history
+2. Calculates statistics (min, max, mean, stdDev) from recent history
+3. Tracks actual time spent in drift vs expanding mode
+4. Continuously adjusts threshold to achieve target drift ratio (~30%)
+
+**Configuration:**
+| Parameter | Value | Purpose |
+|-----------|-------|---------|
+| History Duration | 60s | Window for statistics calculation |
+| Sample Interval | 100ms | How often to record amplitude |
+| Target Drift Ratio | 30% | Desired time in drift mode |
+| Threshold Adjust Rate | 0.001 | Speed of threshold adaptation |
+| Min Threshold | 0.01 | Floor for sensitivity |
+| Max Threshold | 0.50 | Ceiling for sensitivity |
+
+**Behavior:**
+- If spending too little time in drift → raises threshold (harder to trigger expanding)
+- If spending too much time in drift → lowers threshold (easier to trigger expanding)
+- Adapts gradually to avoid jarring transitions
+- Works equally well for quiet ambient music or loud electronic
+
+**Display:** Stats panel shows current drift ratio and adaptive threshold when listening.
 
 ### 3-Cluster System
 Blobs assigned to clusters by ID, creating visual variety:
@@ -104,13 +132,13 @@ See mapping table above. Key principle: "don't go overboard" - subtle, low-hangi
 
 ```
 src/components/wavefront/
-├── types.ts        # WaveFrontBlob, BlobFieldConfig, DRIFT_CONFIG
-├── physics.ts      # Velocity, spawning, position updates
-├── flowField.ts    # Curl noise implementation
-├── drift.ts        # Ambient swirling mode
-├── useAudio.ts     # Web Audio API microphone input
-├── Blobulator.tsx  # Main React component
-└── index.ts        # Module exports
+├── types.ts            # WaveFrontBlob, BlobFieldConfig, DRIFT_CONFIG
+├── physics.ts          # Velocity, spawning, position updates
+├── flowField.ts        # Curl noise implementation
+├── drift.ts            # Ambient swirling mode
+├── useAdaptiveAudio.ts # Self-calibrating audio with adaptive threshold
+├── Blobulator.tsx      # Main React component
+└── index.ts            # Module exports
 ```
 
 ## Repository
