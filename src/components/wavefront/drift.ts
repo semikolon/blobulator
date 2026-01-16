@@ -55,7 +55,16 @@ export function applyDriftToBlobs(
     let driftX = Math.cos(effectiveDirection) * driftSpeed * deltaMs;
     let driftY = Math.sin(effectiveDirection) * driftSpeed * deltaMs;
 
-    // 3. Viewport boundary containment
+    // 3. Center gravity - gentle pull toward center
+    // Creates natural clustering effect like brf-auto drift mode
+    const distFromCenter = Math.sqrt(blob.x * blob.x + blob.y * blob.y);
+    if (distFromCenter > 50) {
+      const pullStrength = DRIFT_CONFIG.centerGravityStrength * deltaMs;
+      driftX -= blob.x * pullStrength;
+      driftY -= blob.y * pullStrength;
+    }
+
+    // 4. Viewport boundary containment
     // Soft boundaries at viewport edges gently push blobs back inward
     const viewportX = blob.x + centerX;
     const viewportY = blob.y + centerY;
@@ -79,7 +88,7 @@ export function applyDriftToBlobs(
       driftY -= (viewportY - (viewportHeight - margin)) * strength * deltaMs;
     }
 
-    // 4. Gradual direction evolution - swirling effect
+    // 5. Gradual direction evolution - swirling effect
     const curlAngle =
       Math.sin(elapsedMs * 0.0002 + phaseOffset) * Math.PI * 0.15;
     const newDirection =

@@ -44,7 +44,7 @@ export const DEFAULT_CONFIG: BlobFieldConfig = {
   accelerationFactor: 3.0,        // Speed multiplier per generation
   baseBlobSize: 18,               // SMALL blobs for metaball merging!
   shrinkFactor: 0.92,             // Slower shrink = more visible generations
-  spawnIntervalMs: 200,           // FASTER spawning for more action
+  spawnIntervalMs: 300,           // Balance action vs CPU load
   spawnCountRange: [2, 3],        // MORE blobs per spawn
   spawnDistance: [15, 25],        // Spread them out more
   spawnDirectionOffset: 0.4,      // Wider spread angle
@@ -98,6 +98,8 @@ export const DRIFT_CONFIG = {
   // Viewport boundary containment
   boundaryMargin: 200,          // Pixels from edge where soft boundary starts
   boundaryStrength: 0.00008,    // How strongly blobs are pushed back
+  // Center gravity - pulls blobs toward center in drift mode
+  centerGravityStrength: 0.000015, // Gentle pull toward center
 } as const;
 
 export type DriftConfig = typeof DRIFT_CONFIG;

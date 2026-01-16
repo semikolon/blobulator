@@ -33,8 +33,8 @@ const styles = {
   container: {
     position: 'fixed' as const,
     inset: 0,
-    backgroundColor: '#18181b',
     overflow: 'hidden',
+    transition: 'background-color 0.8s ease',
   },
   controlPanel: {
     position: 'absolute' as const,
@@ -259,8 +259,14 @@ export function Blobulator() {
   const centerX = viewport.width / 2;
   const centerY = viewport.height / 2;
 
+  // Dynamic background color based on mode
+  // Drift mode: deeper blue-purple tint, Expanding: dark neutral
+  const backgroundColor = mode === 'drift'
+    ? '#1a1525'  // Subtle purple tint for drift
+    : '#18181b'; // Dark neutral for expanding
+
   return (
-    <div style={styles.container}>
+    <div style={{ ...styles.container, backgroundColor }}>
       {/* Control Panel */}
       <div style={styles.controlPanel}>
         <h1 style={styles.title}>Blobulator</h1>
@@ -303,7 +309,7 @@ export function Blobulator() {
         )}
 
         <p style={styles.stats}>
-          Mode: {mode} | Blobs: {blobs.length} | Frontier: {blobs.filter(b => b.isFrontier).length}
+          Blobs: {blobs.length} | Frontier: {blobs.filter(b => b.isFrontier).length}
         </p>
       </div>
 
