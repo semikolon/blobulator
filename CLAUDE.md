@@ -8,6 +8,17 @@ Audio-reactive metaball visualization engine with wavefront expansion animation,
 
 **Working visualization** with 3-cluster system, audio reactivity, and two animation modes.
 
+### Baseline v1 - "Beautiful" (January 16, 2026)
+
+Reference screenshots saved in `docs/reference-screenshots/baseline-v1-*.png`
+
+**User feedback (verbatim):**
+> "it's beautiful. I want this stored as a baseline of one mode that I really enjoy. The audio/music interpretation/sensitivity can always be changed/tweaked, but I enjoy this resultant visualization definitely."
+
+> "It's also a bit cool when it switches from expanding to drift mode, in electronic songs when that corresponds to the bass/beat and the background hum of ambient music like Carbon Based Lifeforms etc. :)"
+
+This configuration represents a validated aesthetic baseline. Future audio sensitivity tweaks should preserve this visual character.
+
 ### Animation Modes
 - **Expanding** (💥): Active wavefront expansion when audio amplitude > 0.03
 - **Drift** (🌊): Calm ambient swirling when quiet, with center gravity + breathing effect
