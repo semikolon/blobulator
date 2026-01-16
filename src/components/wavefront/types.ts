@@ -42,21 +42,21 @@ export interface BlobFieldConfig {
 export const DEFAULT_CONFIG: BlobFieldConfig = {
   baseSpeed: 2,
   accelerationFactor: 3.0,        // Speed multiplier per generation
-  baseBlobSize: 50,
-  shrinkFactor: 0.85,
-  spawnIntervalMs: 600,           // How often new frontier blobs spawn
-  spawnCountRange: [1, 1],
-  spawnDistance: [8, 12],
-  spawnDirectionOffset: 0.1,
+  baseBlobSize: 18,               // SMALL blobs for metaball merging!
+  shrinkFactor: 0.92,             // Slower shrink = more visible generations
+  spawnIntervalMs: 200,           // FASTER spawning for more action
+  spawnCountRange: [2, 3],        // MORE blobs per spawn
+  spawnDistance: [15, 25],        // Spread them out more
+  spawnDirectionOffset: 0.4,      // Wider spread angle
   gooeyIntensity: 'strong',
-  useCurlNoise: true,             // Organic flow vs random
-  curlScale: 0.009,               // Lower = sweeping, higher = tight
-  curlLerpFactor: 0.02,           // Blend speed toward flow (LOW = preserves momentum!)
-  curlTimeEvolution: 0.0003,      // Flow field change rate
+  useCurlNoise: true,
+  curlScale: 0.009,
+  curlLerpFactor: 0.02,
+  curlTimeEvolution: 0.0003,
   curlBlobVariation: 0.02,
   positionJitter: 8,
   expansionEasing: 0.6,
-  growthFactor: 15.0,             // Blob size multiplier at 100% progress
+  growthFactor: 1.5,              // Subtle growth, not massive
 };
 
 // Coral/pink palette from brf-auto

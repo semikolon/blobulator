@@ -229,15 +229,15 @@ export function Blobulator() {
   // Calculate display size with audio reactivity and drift breathing
   const getDisplaySize = (blob: WaveFrontBlob, index: number) => {
     const baseSize = blob.size;
-    const growthMultiplier = 1 + config.growthFactor * 0.5;
-    const audioBoost = 1 + features.amplitude * 0.5;
+    // Subtle audio boost only - no massive growth multiplier!
+    const audioBoost = 1 + features.amplitude * 0.3;
 
     // Add size breathing in drift mode (subtle pulsing effect)
     const breathingMultiplier = mode === 'drift'
       ? getSizeBreathingMultiplier(elapsedRef.current, index)
       : 1;
 
-    return baseSize * growthMultiplier * audioBoost * breathingMultiplier;
+    return baseSize * audioBoost * breathingMultiplier;
   };
 
   // Dynamic color based on audio features
