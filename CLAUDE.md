@@ -138,3 +138,76 @@ interface AudioFeatures {
 6. Blobs should MERGE where they overlap (gooey effect)
 7. Colors should shift with bass/treble
 8. Bass hits should trigger faster spawning
+
+---
+
+## Future Enhancement: Audio Input Options
+
+*Researched January 2026 - documented for future implementation*
+
+### Current: Microphone Input
+Works well for ambient room audio (speakers playing music). Simple `getUserMedia({ audio: true })`.
+
+### Option 1: Tab Audio Capture (getDisplayMedia)
+
+Captures audio from a specific browser tab only.
+
+```javascript
+const stream = await navigator.mediaDevices.getDisplayMedia({
+  video: true,  // Required even for audio-only (API quirk)
+  audio: { systemAudio: 'include' }
+});
+const source = audioContext.createMediaStreamSource(stream);
+source.connect(analyser);
+```
+
+**Limitations:**
+- Chrome/Edge only (Firefox/Safari silently ignore audio)
+- User must manually check "Share tab audio" checkbox
+- Only captures audio from shared tab, NOT system-wide
+- macOS: Tab audio works, but NOT full system audio
+
+**Sources:**
+- [MDN: getDisplayMedia()](https://developer.mozilla.org/en-US/docs/Web/API/MediaDevices/getDisplayMedia)
+- [Dev.to: System Audio in Browser](https://dev.to/flo152121063061/i-tried-to-capture-system-audio-in-the-browser-heres-what-i-learned-1f99)
+
+### Option 2: Virtual Audio Device (BlackHole) - RECOMMENDED
+
+For true system audio on macOS (Spotify app, any audio source):
+
+1. Install [BlackHole](https://existential.audio/blackhole/) (free, open source)
+2. Create Multi-Output Device in Audio MIDI Setup (speakers + BlackHole)
+3. Blobulator captures BlackHole as a "microphone" via regular `getUserMedia`
+
+**Benefits:**
+- Captures ALL system audio (any app, any source)
+- No screen sharing picker needed
+- Works with existing mic capture code
+- Flexible - play music from anywhere
+
+### Option 3: Play Our Own Audio
+
+Load and play audio files directly, connect to AnalyserNode:
+
+```javascript
+const audio = new Audio('/path/to/music.mp3');
+const source = audioContext.createMediaElementSource(audio);
+source.connect(analyser);
+source.connect(audioContext.destination); // Also play to speakers
+audio.play();
+```
+
+**Benefits:**
+- Simplest implementation
+- No permissions needed
+- Guaranteed audio quality
+
+**Limitations:**
+- Only plays files we provide
+- Less flexible than system audio capture
+
+### Implementation Priority
+
+1. **BlackHole setup** - best flexibility, works now with mic input
+2. **Own audio playback** - simple addition for demos
+3. **Tab audio** - nice-to-have for Chrome users
