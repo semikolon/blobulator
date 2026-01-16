@@ -121,13 +121,17 @@ export function Blobulator() {
   const lastFrameRef = useRef<number>(0);
 
   // Switch between modes based on audio amplitude
+  // Only switch to drift when microphone IS listening AND amplitude is low
   useEffect(() => {
-    if (features.amplitude > AMPLITUDE_THRESHOLD) {
+    if (!isListening) {
+      // Keep expanding as default when not listening
+      setMode('expanding');
+    } else if (features.amplitude > AMPLITUDE_THRESHOLD) {
       setMode('expanding');
     } else {
       setMode('drift');
     }
-  }, [features.amplitude]);
+  }, [features.amplitude, isListening]);
 
   // Initialize blobs
   useEffect(() => {
