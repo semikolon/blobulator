@@ -43,6 +43,13 @@ const CLUSTER_HUE_RANGES = [
   { base: 25, spread: 15 },    // Cluster 2 (large/slow): Orange
 ];
 
+// Get cluster index from blob ID (uses random part for even distribution)
+function getClusterIndex(blobId: string): number {
+  const randomPart = blobId.split('-')[1] || blobId;
+  const hash = randomPart.charCodeAt(0) + randomPart.charCodeAt(1) + randomPart.charCodeAt(2);
+  return hash % 3;
+}
+
 // Inline styles since we don't have Tailwind
 const styles = {
   container: {
@@ -185,7 +192,7 @@ export function Blobulator() {
 
         // Update existing blobs with physics
         for (const blob of updatedBlobs) {
-          const cluster = CLUSTERS[blob.id.charCodeAt(0) % 3];
+          const cluster = CLUSTERS[getClusterIndex(blob.id)];
           updateBlobVelocity(blob, config, elapsedRef.current, 0.8 * cluster.speedMultiplier * midSpeedBoost);
           updateBlobPosition(blob);
         }
@@ -245,7 +252,7 @@ export function Blobulator() {
   // Calculate display size with cluster variation and audio reactivity
   const getDisplaySize = (blob: WaveFrontBlob, index: number) => {
     // Assign blob to one of 3 clusters based on its ID
-    const clusterIndex = blob.id.charCodeAt(0) % 3;
+    const clusterIndex = getClusterIndex(blob.id);
     const cluster = CLUSTERS[clusterIndex];
 
     // Base size with cluster multiplier
@@ -270,8 +277,8 @@ export function Blobulator() {
 
   // Calculate base HSL color for a blob (without neighbor blending)
   const getBlobBaseHSL = (blob: WaveFrontBlob): { h: number; s: number; l: number } => {
-    // Determine which cluster this blob belongs to
-    const clusterIndex = blob.id.charCodeAt(0) % 3;
+    // Determine cluster from blob ID
+    const clusterIndex = getClusterIndex(blob.id);
     const clusterHue = CLUSTER_HUE_RANGES[clusterIndex];
 
     // Base hue from cluster + per-blob variation within cluster's spread
