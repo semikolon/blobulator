@@ -69,14 +69,25 @@ From user's screenshot - these create the desired multi-blob gooey effect:
 | Flow Lerp | 0.02 | **KEY: LOW value preserves momentum** |
 | Time Evolution | 0.00030 | Flow field change rate |
 
-## Core Animation Rules (Implemented)
+## Core Animation Rules
 
-1. **Small blobs** (baseBlobSize=18) - many distinct blobs, not few huge ones
-2. **Active spawning** - frontier blobs spawn outward, 2-3 per interval at 300ms
-3. **Metaball merging** - SVG gooey filter creates liquid effect where blobs overlap
-4. **Curl noise** - organic sweeping paths (Flow Lerp 0.02 preserves momentum)
-5. **Velocity gradient** - frontier races ahead (accelerationFactor=3.0)
-6. **Audio reactivity** - see mapping table above
+### 1. Many Small Blobs, Not Few Huge Ones
+`baseBlobSize=18` creates many distinct blobs (200-300 typically). If blobs are too large, they merge into one amorphous mass and lose the metaball effect.
+
+### 2. Active Spawning Creates Wavefront
+Frontier blobs (outer edge) continuously spawn new blobs outward. Each generation is smaller (`shrinkFactor=0.92`) and faster (`accelerationFactor=3.0`), creating the "wave" expanding outward.
+
+### 3. Metaball/Gooey Effect = Blobs Merge When Close
+SVG gooey filter (`feGaussianBlur` + `feColorMatrix`) creates liquid merging where blobs overlap. Sweet spot: many medium blobs with partial overlap. Too big = one mass. Too small/far = no merging.
+
+### 4. Curl Noise Creates Organic Flow
+Blobs don't move in straight lines - curl noise field guides direction with sweeping curves. `Flow Lerp 0.02` (low value) preserves momentum for sweeping paths. Higher lerp = snappy, less organic.
+
+### 5. Velocity Gradient = Frontier Races Ahead
+Generation 0 (core) blobs are nearly static. Each subsequent generation moves faster. This creates the expanding wavefront visual where outer blobs race ahead of inner ones.
+
+### 6. Audio Reactivity
+See mapping table above. Key principle: "don't go overboard" - subtle, low-hanging-fruit mappings that enhance without overwhelming the core animation.
 
 ## Current Code Structure (blobulator)
 
