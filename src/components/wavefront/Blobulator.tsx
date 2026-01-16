@@ -32,8 +32,18 @@ const CLUSTERS = [
 ];
 
 // Color blending configuration
-const COLOR_BLEND_RADIUS = 80;      // Pixels - blobs within this distance influence each other
-const COLOR_BLEND_STRENGTH = 0.4;   // 0-1 - how much neighbors influence color (0.4 = 40% max blend)
+const COLOR_BLEND_RADIUS = 100;     // Pixels - blobs within this distance influence each other
+const COLOR_BLEND_STRENGTH = 0.7;   // 0-1 - how much neighbors influence color (stronger = more noticeable)
+
+// Cluster color palettes - each cluster has its own hue range
+// Cluster 0 (small & fast): Purple to neon pink (270-320)
+// Cluster 1 (medium): Warm pink to coral (330-360)
+// Cluster 2 (large & slow): Red to orange (0-30)
+const CLUSTER_HUE_RANGES = [
+  { base: 295, spread: 25 },   // Purple/neon pink cluster
+  { base: 345, spread: 15 },   // Warm pink cluster
+  { base: 15, spread: 15 },    // Coral/orange cluster
+];
 
 // Inline styles since we don't have Tailwind
 const styles = {
@@ -262,15 +272,21 @@ export function Blobulator() {
 
   // Calculate base HSL color for a blob (without neighbor blending)
   const getBlobBaseHSL = (blob: WaveFrontBlob): { h: number; s: number; l: number } => {
-    // Base hue from blob's color index (spread across pink/red spectrum)
-    const baseHue = 330 + blob.colorIndex * 15; // 330-390 (wraps to 30)
+    // Determine which cluster this blob belongs to
+    const clusterIndex = blob.id.charCodeAt(0) % 3;
+    const clusterHue = CLUSTER_HUE_RANGES[clusterIndex];
+
+    // Base hue from cluster + per-blob variation within cluster's spread
+    const baseHue = clusterHue.base + (blob.colorIndex % 5) * (clusterHue.spread / 5);
 
     // Bass shifts toward red/orange (lower hue), treble toward purple (higher hue)
-    const hueShift = (features.bass - features.treble) * 40;
+    const hueShift = (features.bass - features.treble) * 30;
     const hue = (baseHue + hueShift + 360) % 360;
 
     // Amplitude affects saturation and lightness
-    const saturation = 70 + features.amplitude * 25; // 70-95%
+    // Purple cluster gets higher saturation for that neon pop
+    const baseSaturation = clusterIndex === 0 ? 85 : 70;
+    const saturation = baseSaturation + features.amplitude * 15; // 70-95% or 85-100%
     const lightness = 55 + features.amplitude * 15;  // 55-70%
 
     return { h: hue, s: saturation, l: lightness };

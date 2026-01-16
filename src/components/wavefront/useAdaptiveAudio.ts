@@ -23,9 +23,9 @@ const MAX_SAMPLES = HISTORY_DURATION_MS / SAMPLE_INTERVAL_MS; // 600 samples
 
 const TARGET_DRIFT_RATIO = 0.30;     // Target: 30% of time in drift mode
 const THRESHOLD_ADJUST_RATE = 0.001; // How fast threshold adapts (per sample)
-const MIN_THRESHOLD = 0.01;          // Never go below this
+const MIN_THRESHOLD = 0.04;          // Never go below this - prevents reacting to desk touches/room noise
 const MAX_THRESHOLD = 0.5;           // Never go above this
-const INITIAL_THRESHOLD = 0.03;      // Starting threshold
+const INITIAL_THRESHOLD = 0.05;      // Starting threshold (slightly above min to avoid noise)
 
 interface AdaptiveState {
   amplitudeHistory: number[];
