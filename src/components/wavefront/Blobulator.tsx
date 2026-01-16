@@ -34,14 +34,13 @@ const CLUSTERS = [
 // Color blending configuration
 const COLOR_BLEND_RADIUS = 60;      // Pixels - only very close blobs influence each other
 const COLOR_BLEND_STRENGTH = 0.35;  // 0-1 - subtle blending, preserves cluster identity
-const COLOR_BLEND_MIN_AGE = 2000;   // ms - blobs must be this old before they blend (avoids spawn pool infection)
+const COLOR_BLEND_MIN_AGE = 5000;   // ms - blobs must be 5s old before blending (stay distinct longer)
 
-// Cluster color palettes - each cluster has its own hue range
-// Two warm clusters (original baseline) + one cool purple cluster
+// Cluster color palettes - spread 60°+ apart for clearly distinct colors
 const CLUSTER_HUE_RANGES = [
-  { base: 285, spread: 25 },   // Cluster 0 (small/fast): Purple/violet - the NEW cool accent
-  { base: 345, spread: 20 },   // Cluster 1 (medium): Warm pink (original baseline)
-  { base: 10, spread: 20 },    // Cluster 2 (large/slow): Coral/red-orange (original baseline)
+  { base: 265, spread: 15 },   // Cluster 0 (small/fast): Violet/purple
+  { base: 335, spread: 15 },   // Cluster 1 (medium): Hot pink
+  { base: 25, spread: 15 },    // Cluster 2 (large/slow): Orange
 ];
 
 // Inline styles since we don't have Tailwind
