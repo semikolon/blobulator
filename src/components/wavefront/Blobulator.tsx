@@ -1,12 +1,18 @@
 /**
  * Blobulator - Audio-Reactive Metaball Visualization
  *
- * Continuously expanding wavefront blobs that react to audio input.
- * Lowest-hanging fruit: amplitude affects size, bass affects spawn rate.
+ * Two-mode animation engine ported from brf-auto:
+ * 1. Expanding: Wavefront blobs spawn and expand outward (when audio is active)
+ * 2. Drift: Calm ambient swirling motion (when audio is quiet)
+ *
+ * Audio reactivity:
+ * - Amplitude affects size + triggers expansion mode
+ * - Bass affects spawn rate and hue warmth
+ * - Treble shifts hue toward cooler tones
  */
 
 import { useState, useEffect, useRef, useCallback } from 'react';
-import type { WaveFrontBlob, BlobFieldConfig } from './types';
+import type { WaveFrontBlob, BlobFieldConfig, AnimationMode } from './types';
 import { DEFAULT_CONFIG } from './types';
 import {
   generateInitialBlobs,
@@ -15,7 +21,11 @@ import {
   updateBlobVelocity,
   recycleBlobsAtEdge,
 } from './physics';
+import { applyDriftToBlobs, getSizeBreathingMultiplier } from './drift';
 import { useAudio } from './useAudio';
+
+// Threshold for switching between drift and expansion modes
+const AMPLITUDE_THRESHOLD = 0.15;
 
 // Inline styles since we don't have Tailwind
 const styles = {
@@ -102,12 +112,22 @@ export function Blobulator() {
   const [blobs, setBlobs] = useState<WaveFrontBlob[]>([]);
   const [config] = useState<BlobFieldConfig>(DEFAULT_CONFIG);
   const [viewport, setViewport] = useState({ width: window.innerWidth, height: window.innerHeight });
+  const [mode, setMode] = useState<AnimationMode>('expanding');
   const { isListening, error, features, startListening, stopListening } = useAudio();
 
   const animationRef = useRef<number | null>(null);
   const lastSpawnRef = useRef<number>(0);
   const elapsedRef = useRef<number>(0);
   const lastFrameRef = useRef<number>(0);
+
+  // Switch between modes based on audio amplitude
+  useEffect(() => {
+    if (features.amplitude > AMPLITUDE_THRESHOLD) {
+      setMode('expanding');
+    } else {
+      setMode('drift');
+    }
+  }, [features.amplitude]);
 
   // Initialize blobs
   useEffect(() => {
@@ -125,7 +145,7 @@ export function Blobulator() {
     return () => window.removeEventListener('resize', handleResize);
   }, []);
 
-  // Animation loop
+  // Animation loop - switches between expanding and drift modes
   const animate = useCallback((timestamp: number) => {
     const deltaMs = timestamp - lastFrameRef.current;
     lastFrameRef.current = timestamp;
@@ -134,27 +154,39 @@ export function Blobulator() {
     setBlobs(currentBlobs => {
       let updatedBlobs = [...currentBlobs];
 
-      // Audio-reactive adjustments (lowest hanging fruit)
-      // Bass affects spawn rate (faster spawning on bass hits)
-      const spawnInterval = Math.max(
-        200,
-        config.spawnIntervalMs - features.bass * 400
-      );
+      if (mode === 'expanding') {
+        // EXPANDING MODE: Active wavefront expansion (when audio is playing)
+        // Bass affects spawn rate (faster spawning on bass hits)
+        const spawnInterval = Math.max(
+          200,
+          config.spawnIntervalMs - features.bass * 400
+        );
 
-      // Update existing blobs
-      for (const blob of updatedBlobs) {
-        updateBlobVelocity(blob, config, elapsedRef.current, 0.8);
-        updateBlobPosition(blob);
-      }
-
-      // Spawn new blobs from frontier
-      if (elapsedRef.current - lastSpawnRef.current > spawnInterval) {
-        const frontier = updatedBlobs.filter(b => b.isFrontier);
-        if (frontier.length > 0) {
-          const newBlobs = spawnFromFrontier(frontier, config);
-          updatedBlobs = [...updatedBlobs, ...newBlobs];
+        // Update existing blobs with physics
+        for (const blob of updatedBlobs) {
+          updateBlobVelocity(blob, config, elapsedRef.current, 0.8);
+          updateBlobPosition(blob);
         }
-        lastSpawnRef.current = elapsedRef.current;
+
+        // Spawn new blobs from frontier
+        if (elapsedRef.current - lastSpawnRef.current > spawnInterval) {
+          const frontier = updatedBlobs.filter(b => b.isFrontier);
+          if (frontier.length > 0) {
+            const newBlobs = spawnFromFrontier(frontier, config);
+            updatedBlobs = [...updatedBlobs, ...newBlobs];
+          }
+          lastSpawnRef.current = elapsedRef.current;
+        }
+      } else {
+        // DRIFT MODE: Calm ambient swirling (when audio is quiet)
+        // Ported from brf-auto - creates gentle metaball movement
+        updatedBlobs = applyDriftToBlobs(
+          updatedBlobs,
+          deltaMs,
+          elapsedRef.current,
+          viewport.width,
+          viewport.height
+        );
       }
 
       // Recycle blobs that have left the viewport
@@ -177,7 +209,7 @@ export function Blobulator() {
     });
 
     animationRef.current = requestAnimationFrame(animate);
-  }, [config, features, viewport]);
+  }, [config, features, viewport, mode]);
 
   // Start/stop animation
   useEffect(() => {
@@ -189,12 +221,18 @@ export function Blobulator() {
     };
   }, [animate]);
 
-  // Calculate display size with audio reactivity
-  const getDisplaySize = (blob: WaveFrontBlob) => {
+  // Calculate display size with audio reactivity and drift breathing
+  const getDisplaySize = (blob: WaveFrontBlob, index: number) => {
     const baseSize = blob.size;
     const growthMultiplier = 1 + config.growthFactor * 0.5;
     const audioBoost = 1 + features.amplitude * 0.5;
-    return baseSize * growthMultiplier * audioBoost;
+
+    // Add size breathing in drift mode (subtle pulsing effect)
+    const breathingMultiplier = mode === 'drift'
+      ? getSizeBreathingMultiplier(elapsedRef.current, index)
+      : 1;
+
+    return baseSize * growthMultiplier * audioBoost * breathingMultiplier;
   };
 
   // Dynamic color based on audio features
@@ -260,7 +298,7 @@ export function Blobulator() {
         )}
 
         <p style={styles.stats}>
-          Blobs: {blobs.length} | Frontier: {blobs.filter(b => b.isFrontier).length}
+          Mode: {mode} | Blobs: {blobs.length} | Frontier: {blobs.filter(b => b.isFrontier).length}
         </p>
       </div>
 
@@ -281,12 +319,12 @@ export function Blobulator() {
         </defs>
 
         <g filter="url(#goo)">
-          {blobs.map(blob => (
+          {blobs.map((blob, index) => (
             <circle
               key={blob.id}
               cx={centerX + blob.x}
               cy={centerY + blob.y}
-              r={getDisplaySize(blob)}
+              r={getDisplaySize(blob, index)}
               fill={getDynamicColor(blob)}
             />
           ))}

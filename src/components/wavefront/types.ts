@@ -73,3 +73,30 @@ export interface AudioFeatures {
   mid: number;          // 0-1 mid frequency energy
   treble: number;       // 0-1 high frequency energy
 }
+
+/**
+ * Animation mode - continuous expansion vs ambient drift
+ * Ported from brf-auto's phase system
+ */
+export type AnimationMode = 'expanding' | 'drift';
+
+/**
+ * Drift mode configuration - calm ambient motion
+ * Applied when audio is quiet, creates gentle swirling effect
+ * Ported from brf-auto/wavefront/drift.ts
+ */
+export const DRIFT_CONFIG = {
+  speed: 0.018,                  // px/ms - base drift speed
+  directionChangeRate: 0.0016,  // How quickly direction evolves
+  sizeBreathingRate: 0.0008,    // Size pulsing frequency
+  sizeBreathingAmount: 0.03,    // 3% size variation
+  curlInfluence: 0.15,          // How much curl noise affects drift
+  // Per-blob variation for better metaball effects
+  speedVariationAmount: 0.8,    // ±80% speed variation between blobs
+  directionWobbleAmount: 0.7,   // ~40° of direction wobble per blob
+  // Viewport boundary containment
+  boundaryMargin: 200,          // Pixels from edge where soft boundary starts
+  boundaryStrength: 0.00008,    // How strongly blobs are pushed back
+} as const;
+
+export type DriftConfig = typeof DRIFT_CONFIG;
