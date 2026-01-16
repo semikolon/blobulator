@@ -31,6 +31,10 @@ const CLUSTERS = [
   { sizeMultiplier: 1.5, speedMultiplier: 0.6, centerOffset: { x: 180, y: -50 } },    // Large & slow
 ];
 
+// Color blending configuration
+const COLOR_BLEND_RADIUS = 80;      // Pixels - blobs within this distance influence each other
+const COLOR_BLEND_STRENGTH = 0.4;   // 0-1 - how much neighbors influence color (0.4 = 40% max blend)
+
 // Inline styles since we don't have Tailwind
 const styles = {
   container: {
@@ -256,8 +260,8 @@ export function Blobulator() {
     return baseSize * blobVariation * amplitudeBoost * midWobble * breathingMultiplier;
   };
 
-  // Dynamic color based on audio features
-  const getDynamicColor = (blob: WaveFrontBlob) => {
+  // Calculate base HSL color for a blob (without neighbor blending)
+  const getBlobBaseHSL = (blob: WaveFrontBlob): { h: number; s: number; l: number } => {
     // Base hue from blob's color index (spread across pink/red spectrum)
     const baseHue = 330 + blob.colorIndex * 15; // 330-390 (wraps to 30)
 
@@ -269,7 +273,62 @@ export function Blobulator() {
     const saturation = 70 + features.amplitude * 25; // 70-95%
     const lightness = 55 + features.amplitude * 15;  // 55-70%
 
-    return `hsl(${hue}, ${saturation}%, ${lightness}%)`;
+    return { h: hue, s: saturation, l: lightness };
+  };
+
+  // Dynamic color with neighbor blending - blobs become more similar when close
+  const getDynamicColor = (blob: WaveFrontBlob, index: number) => {
+    const baseColor = getBlobBaseHSL(blob);
+
+    // Find nearby blobs and calculate weighted color influence
+    let totalWeight = 0;
+    let weightedHue = 0;
+    let weightedSat = 0;
+    let weightedLight = 0;
+
+    for (let i = 0; i < blobs.length; i++) {
+      if (i === index) continue; // Skip self
+
+      const other = blobs[i];
+      const dx = blob.x - other.x;
+      const dy = blob.y - other.y;
+      const distance = Math.sqrt(dx * dx + dy * dy);
+
+      if (distance < COLOR_BLEND_RADIUS) {
+        // Weight falls off with distance (1 at center, 0 at radius edge)
+        const weight = 1 - (distance / COLOR_BLEND_RADIUS);
+        const otherColor = getBlobBaseHSL(other);
+
+        // Handle hue wrapping (e.g., 350° and 10° should average to 0°, not 180°)
+        let hueDiff = otherColor.h - baseColor.h;
+        if (hueDiff > 180) hueDiff -= 360;
+        if (hueDiff < -180) hueDiff += 360;
+
+        weightedHue += hueDiff * weight;
+        weightedSat += otherColor.s * weight;
+        weightedLight += otherColor.l * weight;
+        totalWeight += weight;
+      }
+    }
+
+    // Blend toward neighbor average if there are nearby blobs
+    let finalHue = baseColor.h;
+    let finalSat = baseColor.s;
+    let finalLight = baseColor.l;
+
+    if (totalWeight > 0) {
+      const avgHueOffset = weightedHue / totalWeight;
+      const avgSat = weightedSat / totalWeight;
+      const avgLight = weightedLight / totalWeight;
+
+      // Apply blending (strength determines how much we move toward neighbors)
+      const blendFactor = Math.min(totalWeight * 0.3, 1) * COLOR_BLEND_STRENGTH;
+      finalHue = (baseColor.h + avgHueOffset * blendFactor + 360) % 360;
+      finalSat = baseColor.s + (avgSat - baseColor.s) * blendFactor;
+      finalLight = baseColor.l + (avgLight - baseColor.l) * blendFactor;
+    }
+
+    return `hsl(${finalHue}, ${finalSat}%, ${finalLight}%)`;
   };
 
   const centerX = viewport.width / 2;
@@ -356,7 +415,7 @@ export function Blobulator() {
               cx={centerX + blob.x}
               cy={centerY + blob.y}
               r={getDisplaySize(blob, index)}
-              fill={getDynamicColor(blob)}
+              fill={getDynamicColor(blob, index)}
             />
           ))}
         </g>
