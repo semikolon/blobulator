@@ -4,18 +4,41 @@
 
 Audio-reactive metaball visualization engine with wavefront expansion animation, ported from brf-auto's loading animation system.
 
-## CRITICAL: User Feedback (Verbatim)
+## Current State (January 2026)
 
-### Initial Vision
-> "I love these settings for the wavefront animation. Could you use these as default for this new music visualization? And only slightly tweak it or tweak colors and other aspects based on the music? Would be great to start testing out with."
+**Working visualization** with 3-cluster system, audio reactivity, and two animation modes.
+
+### Animation Modes
+- **Expanding** (💥): Active wavefront expansion when audio amplitude > 0.03
+- **Drift** (🌊): Calm ambient swirling when quiet, with center gravity + breathing effect
+
+### 3-Cluster System
+Blobs assigned to clusters by ID, creating visual variety:
+
+| Cluster | Size | Speed | Character |
+|---------|------|-------|-----------|
+| 0 | 0.7x | 1.4x | Small & fast |
+| 1 | 1.0x | 1.0x | Medium |
+| 2 | 1.5x | 0.6x | Large & slow |
+
+### Audio → Visual Mapping
+| Audio Feature | Effect |
+|---------------|--------|
+| Amplitude | Size pulse (all blobs, 0.4x boost at max) |
+| Bass | Spawn rate (faster spawning on bass hits) |
+| Mids | Speed boost in expanding mode (0.5x at max) |
+| Mids | Per-blob wobble (different phase per blob) |
+| Bass/Treble | Color hue shift (bass=warm, treble=cool) |
+
+Plus: ±15% individual size variation per blob, breathing effect in drift mode.
+
+---
+
+## Design Principles (User Feedback)
 
 > "don't go overboard with mapping different aspects of the animation to different elements of the audio. Just do the lowest hanging fruit first."
 
-### On the Wavefront Foundation
-> "I told you those specific default slider settings from the brf-auto animation test mode (read about wavefrontTestmode! and its sliders and note the values in the screenshot! especially the curl noise variables influence!) because they resulted in this kind of very nice multi-blobby gooey overlapping metaball-merging expansion which flows organically over time. Try to mirror it as exactly as possible for the foundation!"
-
-### Current Problems (MUST FIX)
-> "It doesn't at ALL look the same. It's just a bunch of HUGE blobs in the middle of the page wobbling to a slightly bigger size and back again, expanding super slowly out from the center of the page. I want more action and smaller blobs and more metaball effect merging of the different blobs! Maybe you haven't understood the metaball effect!"
+> "Try to mirror [brf-auto wavefront settings] as exactly as possible for the foundation!"
 
 ## Reference Documentation in brf-auto
 
@@ -46,42 +69,14 @@ From user's screenshot - these create the desired multi-blob gooey effect:
 | Flow Lerp | 0.02 | **KEY: LOW value preserves momentum** |
 | Time Evolution | 0.00030 | Flow field change rate |
 
-## Desired Behavior Specification
+## Core Animation Rules (Implemented)
 
-### RULE 1: Many Small Blobs, Not Few Huge Ones
-- Base blob size should be small (~20-30px, not 50px)
-- Growth factor affects EXPANSION animation, not resting size
-- Should have 100+ visible distinct blobs, not 66 merged into ~5 shapes
-
-### RULE 2: Active Spawning Creates Wavefront
-- Frontier blobs (outer edge) spawn new blobs outward
-- Spawning should be CONTINUOUS and VISIBLE
-- New generations should be SMALLER and FASTER (shrinkFactor, accelerationFactor)
-- This creates the "wave" expanding outward
-
-### RULE 3: Metaball/Gooey Effect = Blobs MERGE When Close
-- SVG gooey filter (feGaussianBlur + feColorMatrix) creates liquid merging
-- Requires MULTIPLE DISTINCT BLOBS that overlap
-- If blobs are too big, they merge into one mass = BAD
-- If blobs are too small/far apart, no merging = BAD
-- Sweet spot: many medium blobs with partial overlap
-
-### RULE 4: Curl Noise Creates Organic Flow
-- Blobs don't move in straight lines
-- Curl noise field guides direction with sweeping curves
-- Flow Lerp (0.02) = slow blending = preserves momentum = sweeping paths
-- Higher lerp = snappy direction changes = less organic
-
-### RULE 5: Velocity Gradient = Frontier Races Ahead
-- Generation 0 (core) blobs: nearly static
-- Generation 1+: progressively faster
-- accelerationFactor: 3.0 means each generation is 3x faster
-- This creates the "expanding wavefront" visual
-
-### RULE 6: Audio Reactivity (Lowest Hanging Fruit)
-- Amplitude → blob size boost (subtle pulse)
-- Bass → spawn rate (faster spawning on bass hits)
-- Bass/Treble ratio → color hue shift (bass=warm, treble=cool)
+1. **Small blobs** (baseBlobSize=18) - many distinct blobs, not few huge ones
+2. **Active spawning** - frontier blobs spawn outward, 2-3 per interval at 300ms
+3. **Metaball merging** - SVG gooey filter creates liquid effect where blobs overlap
+4. **Curl noise** - organic sweeping paths (Flow Lerp 0.02 preserves momentum)
+5. **Velocity gradient** - frontier races ahead (accelerationFactor=3.0)
+6. **Audio reactivity** - see mapping table above
 
 ## Current Code Structure (blobulator)
 
@@ -96,48 +91,25 @@ src/components/wavefront/
 └── index.ts        # Module exports
 ```
 
-## What's Wrong Currently
-
-1. **Blobs too large**: baseBlobSize=50, growthFactor=15x = massive blobs
-2. **Not enough blobs**: Only 66 blobs, should be 200+
-3. **Blobs not spreading**: They stay clustered in center
-4. **Spawning not visible**: New blobs spawn but merge immediately into mass
-5. **No distinct wavefront**: Should see frontier racing outward
-
-## Next Steps to Fix
-
-1. **Reduce blob sizes**: baseBlobSize=20, shrinkFactor=0.9
-2. **Increase blob count**: spawnCountRange=[2,3], lower spawnIntervalMs
-3. **Increase acceleration**: So frontier visibly races ahead
-4. **Study brf-auto physics.ts**: Especially `generateCoreBlobsForButton` and frontier logic
-5. **Match the gooey filter**: stdDeviation and colorMatrix values from brf-auto
-
 ## Repository
 
 - GitHub: https://github.com/semikolon/blobulator
 - Dev server: http://localhost:5175/
 
-## Audio Features Available
+## Quick Start
 
-```typescript
-interface AudioFeatures {
-  amplitude: number;  // 0-1 overall loudness
-  bass: number;       // 0-1 low frequency energy
-  mid: number;        // 0-1 mid frequency energy
-  treble: number;     // 0-1 high frequency energy
-}
+```bash
+npm run dev          # Start at http://localhost:5175
 ```
 
-## Test Protocol
+Click "Start Microphone" → play music → watch blobs react.
 
-1. Run dev server: `npm run dev`
-2. Open http://localhost:5175
-3. Click "Start Microphone"
-4. Play music
-5. Observe: Should see MANY small-to-medium blobs expanding outward in organic wavefront
-6. Blobs should MERGE where they overlap (gooey effect)
-7. Colors should shift with bass/treble
-8. Bass hits should trigger faster spawning
+**What to observe:**
+- 💥 Expanding mode when music plays (amplitude > 0.03)
+- 🌊 Drift mode during quiet passages
+- Size pulse on amplitude peaks
+- Faster spawning on bass hits
+- Color shifts (bass=warm, treble=cool)
 
 ---
 
