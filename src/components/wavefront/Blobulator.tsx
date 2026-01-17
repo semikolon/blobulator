@@ -36,11 +36,11 @@ const COLOR_BLEND_RADIUS = 80;      // Pixels - blobs within this distance blend
 const COLOR_BLEND_STRENGTH = 0.5;   // 0-1 - more blending for smoother color transitions
 const COLOR_BLEND_MIN_AGE = 3000;   // ms - start blending sooner
 
-// Cluster color palettes - weighted toward purple/pink
+// Cluster color palettes - purple, pink, and orange
 const CLUSTER_HUE_RANGES = [
   { base: 275, spread: 25 },   // Cluster 0: Purple/violet
   { base: 320, spread: 25 },   // Cluster 1: Pink/magenta
-  { base: 345, spread: 25 },   // Cluster 2: Warm pink/coral (NOT orange)
+  { base: 25, spread: 25 },    // Cluster 2: Orange/coral
 ];
 
 // Get cluster index from blob ID (uses random part for even distribution)
@@ -425,13 +425,13 @@ export function Blobulator() {
       {/* Blob Visualization with Gooey SVG Filter */}
       <svg style={styles.svg} viewBox={`0 0 ${viewport.width} ${viewport.height}`}>
         <defs>
-          {/* Gooey metaball filter */}
+          {/* Gooey metaball filter - matched to brf-auto for smoother blob merging */}
           <filter id="goo">
-            <feGaussianBlur in="SourceGraphic" stdDeviation="10" result="blur" />
+            <feGaussianBlur in="SourceGraphic" stdDeviation="12" result="blur" />
             <feColorMatrix
               in="blur"
               mode="matrix"
-              values="1 0 0 0 0  0 1 0 0 0  0 0 1 0 0  0 0 0 19 -9"
+              values="1 0 0 0 0  0 1 0 0 0  0 0 1 0 0  0 0 0 72 -36"
               result="goo"
             />
             <feComposite in="SourceGraphic" in2="goo" operator="atop" />
