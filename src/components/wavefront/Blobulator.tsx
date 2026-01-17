@@ -425,16 +425,11 @@ export function Blobulator() {
       {/* Blob Visualization with Gooey SVG Filter */}
       <svg style={styles.svg} viewBox={`0 0 ${viewport.width} ${viewport.height}`}>
         <defs>
-          {/* Gooey metaball filter - matched to brf-auto for smoother blob merging */}
-          <filter id="goo">
-            <feGaussianBlur in="SourceGraphic" stdDeviation="12" result="blur" />
-            <feColorMatrix
-              in="blur"
-              mode="matrix"
-              values="1 0 0 0 0  0 1 0 0 0  0 0 1 0 0  0 0 0 72 -36"
-              result="goo"
-            />
-            <feComposite in="SourceGraphic" in2="goo" operator="atop" />
+          {/* Gooey metaball filter - matches brf-auto "strong" intensity WITHOUT composite
+              (no feComposite = internal blobs merge together, not just at edges) */}
+          <filter id="goo" colorInterpolationFilters="sRGB">
+            <feGaussianBlur in="SourceGraphic" stdDeviation="16" />
+            <feColorMatrix values="1 0 0 0 0  0 1 0 0 0  0 0 1 0 0  0 0 0 96 -48" />
           </filter>
         </defs>
 
