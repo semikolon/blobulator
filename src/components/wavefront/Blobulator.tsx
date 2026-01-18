@@ -39,11 +39,18 @@ const COLOR_BLEND_RADIUS = 80;      // Pixels - blobs within this distance blend
 const COLOR_BLEND_STRENGTH = 0.5;   // 0-1 - more blending for smoother color transitions
 const COLOR_BLEND_MIN_AGE = 3000;   // ms - start blending sooner
 
-// Cluster color palettes - purple, pink, and orange
-const CLUSTER_HUE_RANGES = [
-  { base: 275, spread: 25 },   // Cluster 0: Purple/violet
-  { base: 320, spread: 25 },   // Cluster 1: Pink/magenta
-  { base: 25, spread: 25 },    // Cluster 2: Orange/coral
+// Cluster color palettes - shift based on intensity
+// Low intensity (calm): Cool colors (purple, blue, teal, turquoise)
+// High intensity (energetic): Warm colors (neon pink, magenta, orange)
+const CLUSTER_HUE_RANGES_COOL = [
+  { base: 270, spread: 30 },   // Cluster 0: Purple/violet
+  { base: 200, spread: 25 },   // Cluster 1: Teal/turquoise
+  { base: 230, spread: 25 },   // Cluster 2: Blue
+];
+const CLUSTER_HUE_RANGES_WARM = [
+  { base: 320, spread: 25 },   // Cluster 0: Neon pink/magenta
+  { base: 345, spread: 20 },   // Cluster 1: Rose/hot pink
+  { base: 25, spread: 30 },    // Cluster 2: Orange/coral
 ];
 
 // Get cluster index from blob ID (uses random part for even distribution)
@@ -307,25 +314,44 @@ export function Blobulator() {
   };
 
   // Calculate base HSL color for a blob (without neighbor blending)
+  // Color shifts based on intensity: cool (purple/blue/teal) → warm (pink/orange)
   const getBlobBaseHSL = (blob: WaveFrontBlob): { h: number; s: number; l: number } => {
-    // Determine cluster from blob ID
     const clusterIndex = getClusterIndex(blob.id);
-    const clusterHue = CLUSTER_HUE_RANGES[clusterIndex];
+    const coolRange = CLUSTER_HUE_RANGES_COOL[clusterIndex];
+    const warmRange = CLUSTER_HUE_RANGES_WARM[clusterIndex];
 
-    // Base hue from cluster + per-blob variation within cluster's spread
-    const baseHue = clusterHue.base + (blob.colorIndex % 5) * (clusterHue.spread / 5);
+    // Interpolate between cool and warm hue ranges based on intensity
+    // Use easeInOut curve for smoother transitions
+    const easedIntensity = intensity < 0.5
+      ? 2 * intensity * intensity
+      : 1 - Math.pow(-2 * intensity + 2, 2) / 2;
 
-    // Bass shifts toward red/orange (lower hue), treble toward purple (higher hue)
-    const hueShift = (features.bass - features.treble) * 30;
-    const hue = (baseHue + hueShift + 360) % 360;
+    // Handle hue interpolation (wrapping around 360°)
+    let coolBase = coolRange.base;
+    let warmBase = warmRange.base;
+    // If warm is near 0° and cool is near 360°, adjust for shortest path
+    if (warmBase < 60 && coolBase > 200) {
+      warmBase += 360; // e.g., 25° → 385°
+    }
+    const interpolatedBase = coolBase + (warmBase - coolBase) * easedIntensity;
+    const baseHue = ((interpolatedBase % 360) + 360) % 360;
 
-    // Amplitude affects saturation and lightness
-    // Purple cluster gets higher saturation for that neon pop
-    const baseSaturation = clusterIndex === 0 ? 85 : 70;
-    const saturation = baseSaturation + features.amplitude * 15; // 70-95% or 85-100%
-    const lightness = 55 + features.amplitude * 15;  // 55-70%
+    // Spread also interpolates
+    const spread = coolRange.spread + (warmRange.spread - coolRange.spread) * easedIntensity;
 
-    return { h: hue, s: saturation, l: lightness };
+    // Per-blob variation within cluster's spread
+    const blobHueVariation = (blob.colorIndex % 5) * (spread / 5);
+
+    // Bass/treble shifts add subtle audio-reactive color changes
+    const audioHueShift = (features.bass - features.treble) * 20;
+    const hue = ((baseHue + blobHueVariation + audioHueShift) % 360 + 360) % 360;
+
+    // Saturation and lightness increase with intensity for that neon pop
+    const baseSaturation = 70 + intensity * 20;  // 70% calm → 90% intense
+    const saturation = baseSaturation + features.amplitude * 10;
+    const lightness = 50 + intensity * 10 + features.amplitude * 10;  // 50-70%
+
+    return { h: hue, s: Math.min(100, saturation), l: Math.min(75, lightness) };
   };
 
   // Dynamic color with neighbor blending - blobs become more similar when close
