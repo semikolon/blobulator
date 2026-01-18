@@ -1,12 +1,15 @@
 /**
  * Blobulator - Audio-Reactive Metaball Visualization
  *
- * Two-mode animation engine ported from brf-auto:
- * 1. Expanding: Wavefront blobs spawn and expand outward (when audio is active)
- * 2. Drift: Calm ambient swirling motion (when audio is quiet)
+ * Unified intensity-based animation system:
+ * - Behaviors blend smoothly on a 0-1 intensity scale (no binary mode switching)
+ * - Low intensity: Calm ambient swirling with center gravity
+ * - High intensity: Active wavefront expansion with faster spawning
+ * - Center gravity always active, strength scales with intensity
  *
  * Audio reactivity:
- * - Amplitude affects size + triggers expansion mode
+ * - Intensity (energy + derivative) drives all animation blending
+ * - BPM detected for tempo-synced effects
  * - Bass affects spawn rate and hue warmth
  * - Treble shifts hue toward cooler tones
  */
@@ -139,7 +142,9 @@ export function Blobulator() {
     isListening,
     error,
     features,
-    mode,
+    intensity,
+    bpm,
+    bpmConfidence,
     adaptiveThreshold,
     stats,
     startListening,
@@ -151,8 +156,8 @@ export function Blobulator() {
   const elapsedRef = useRef<number>(0);
   const lastFrameRef = useRef<number>(0);
 
-  // Mode is now managed by useAdaptiveAudio hook
-  // It auto-adjusts the threshold to achieve target drift ratio (~30%)
+  // Intensity (0-1) drives all animation blending - no binary mode switching
+  // BPM detection provides tempo for future rhythm-synced effects
 
   // Initialize blobs
   useEffect(() => {
@@ -170,7 +175,7 @@ export function Blobulator() {
     return () => window.removeEventListener('resize', handleResize);
   }, []);
 
-  // Animation loop - switches between expanding and drift modes
+  // Animation loop - blends behaviors based on intensity (0-1)
   const animate = useCallback((timestamp: number) => {
     const deltaMs = timestamp - lastFrameRef.current;
     lastFrameRef.current = timestamp;
@@ -179,42 +184,69 @@ export function Blobulator() {
     setBlobs(currentBlobs => {
       let updatedBlobs = [...currentBlobs];
 
-      if (mode === 'expanding') {
-        // EXPANDING MODE: Active wavefront expansion
-        // Bass affects spawn rate (faster spawning on bass hits)
-        const spawnInterval = Math.max(
-          200,
-          config.spawnIntervalMs - features.bass * 400
-        );
+      // ===== UNIFIED MOTION: Blend drift and expansion based on intensity =====
 
-        // Mids affect speed - higher mids = faster movement
-        const midSpeedBoost = 1 + features.mid * 0.5;
-
-        // Update existing blobs with physics
-        for (const blob of updatedBlobs) {
-          const cluster = CLUSTERS[getClusterIndex(blob.id)];
-          updateBlobVelocity(blob, config, elapsedRef.current, 0.8 * cluster.speedMultiplier * midSpeedBoost);
-          updateBlobPosition(blob);
-        }
-
-        // Spawn new blobs from frontier
-        if (elapsedRef.current - lastSpawnRef.current > spawnInterval) {
-          const frontier = updatedBlobs.filter(b => b.isFrontier);
-          if (frontier.length > 0) {
-            const newBlobs = spawnFromFrontier(frontier, config);
-            updatedBlobs = [...updatedBlobs, ...newBlobs];
-          }
-          lastSpawnRef.current = elapsedRef.current;
-        }
-      } else {
-        // DRIFT MODE: Calm ambient swirling (when audio is quiet)
+      // 1. ALWAYS apply drift physics (swirling, direction wobble)
+      //    Strength scales inversely with intensity (stronger when calm)
+      const driftStrength = 1 - intensity * 0.7; // 1.0 at calm, 0.3 at max intensity
+      if (driftStrength > 0.1) {
         updatedBlobs = applyDriftToBlobs(
           updatedBlobs,
-          deltaMs,
+          deltaMs * driftStrength,
           elapsedRef.current,
           viewport.width,
           viewport.height
         );
+      }
+
+      // 2. ALWAYS apply expansion physics (velocity toward edge)
+      //    Strength scales with intensity
+      const expansionStrength = intensity;
+      if (expansionStrength > 0.1) {
+        // Mids affect speed - higher mids = faster movement
+        const midSpeedBoost = 1 + features.mid * 0.5;
+
+        for (const blob of updatedBlobs) {
+          const cluster = CLUSTERS[getClusterIndex(blob.id)];
+          // Scale velocity update by intensity
+          updateBlobVelocity(
+            blob,
+            config,
+            elapsedRef.current,
+            0.8 * cluster.speedMultiplier * midSpeedBoost * expansionStrength
+          );
+          updateBlobPosition(blob);
+        }
+      }
+
+      // 3. ALWAYS apply center gravity - keeps blobs from dispersing too far
+      //    Stronger at HIGH intensity (creates "frenzy concentrated in middle")
+      const centerGravityBase = 0.00002;  // Gentle base pull
+      const centerGravityIntensityBoost = 0.00008;  // Additional pull at max intensity
+      const centerGravityStrength = centerGravityBase + intensity * centerGravityIntensityBoost;
+
+      for (const blob of updatedBlobs) {
+        const distFromCenter = Math.sqrt(blob.x * blob.x + blob.y * blob.y);
+        if (distFromCenter > 30) {
+          blob.x -= blob.x * centerGravityStrength * deltaMs;
+          blob.y -= blob.y * centerGravityStrength * deltaMs;
+        }
+      }
+
+      // 4. Spawning - rate scales with intensity and bass
+      //    Even at low intensity, occasional spawning keeps things alive
+      const baseSpawnInterval = config.spawnIntervalMs;
+      const intensitySpawnBoost = intensity * 400;  // Faster spawning at high intensity
+      const bassSpawnBoost = features.bass * 200;   // Bass hits trigger spawns
+      const spawnInterval = Math.max(150, baseSpawnInterval - intensitySpawnBoost - bassSpawnBoost);
+
+      if (elapsedRef.current - lastSpawnRef.current > spawnInterval) {
+        const frontier = updatedBlobs.filter(b => b.isFrontier);
+        if (frontier.length > 0) {
+          const newBlobs = spawnFromFrontier(frontier, config);
+          updatedBlobs = [...updatedBlobs, ...newBlobs];
+        }
+        lastSpawnRef.current = elapsedRef.current;
       }
 
       // Recycle blobs that have left the viewport
@@ -237,7 +269,7 @@ export function Blobulator() {
     });
 
     animationRef.current = requestAnimationFrame(animate);
-  }, [config, features, viewport, mode]);
+  }, [config, features, viewport, intensity]);
 
   // Start/stop animation
   useEffect(() => {
@@ -267,10 +299,9 @@ export function Blobulator() {
     // Mids create subtle per-blob wobble (different phase per blob)
     const midWobble = 1 + features.mid * 0.2 * Math.sin(elapsedRef.current * 0.003 + index * 0.5);
 
-    // Breathing effect in drift mode
-    const breathingMultiplier = mode === 'drift'
-      ? getSizeBreathingMultiplier(elapsedRef.current, index)
-      : 1;
+    // Breathing effect - stronger at low intensity (calm state)
+    const breathingAmount = (1 - intensity) * getSizeBreathingMultiplier(elapsedRef.current, index);
+    const breathingMultiplier = 1 + (breathingAmount - 1) * (1 - intensity);
 
     return baseSize * blobVariation * amplitudeBoost * midWobble * breathingMultiplier;
   };
@@ -364,10 +395,11 @@ export function Blobulator() {
   const centerX = viewport.width / 2;
   const centerY = viewport.height / 2;
 
-  // Dynamic background color based on mode
-  const backgroundColor = mode === 'drift'
-    ? '#1a1525'  // Subtle purple tint for drift
-    : '#18181b'; // Dark neutral for expanding
+  // Dynamic background color based on intensity
+  // Interpolate between calm purple tint and energetic dark
+  const bgLightness = 10 + intensity * 4;  // 10% at calm, 14% at max
+  const bgSaturation = 20 - intensity * 15; // 20% purple at calm, 5% at max
+  const backgroundColor = `hsl(270, ${bgSaturation}%, ${bgLightness}%)`;
 
   return (
     <div style={{ ...styles.container, backgroundColor }}>
@@ -413,12 +445,17 @@ export function Blobulator() {
         )}
 
         <p style={styles.stats}>
-          {mode === 'drift' ? '🌊' : '💥'} {blobs.length} blobs
+          {intensity < 0.3 ? '🌊' : intensity < 0.7 ? '🔥' : '💥'} {blobs.length} blobs
         </p>
         {isListening && (
-          <p style={{ ...styles.stats, fontSize: 10, marginTop: 4 }}>
-            Drift: {(stats.currentDriftRatio * 100).toFixed(0)}% (target 30%) | Thresh: {adaptiveThreshold.toFixed(3)}
-          </p>
+          <>
+            <p style={{ ...styles.stats, fontSize: 10, marginTop: 4 }}>
+              Intensity: {(intensity * 100).toFixed(0)}% | BPM: {bpm} {bpmConfidence > 0.5 ? '✓' : '~'}
+            </p>
+            <p style={{ ...styles.stats, fontSize: 10, marginTop: 2 }}>
+              Thresh: {adaptiveThreshold.toFixed(3)} | Mean: {stats.mean.toFixed(3)}
+            </p>
+          </>
         )}
       </div>
 

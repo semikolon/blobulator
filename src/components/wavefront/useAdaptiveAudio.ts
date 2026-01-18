@@ -15,7 +15,7 @@
  */
 
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { createRealTimeBpmProcessor, getBiquadFilter } from 'realtime-bpm-analyzer';
+import { createRealtimeBpmAnalyzer, getBiquadFilter, type BpmAnalyzer } from 'realtime-bpm-analyzer';
 import type { AudioFeatures } from './types';
 
 // Configuration constants
@@ -97,7 +97,7 @@ export function useAdaptiveAudio(): AdaptiveAudioResult {
   const audioContextRef = useRef<AudioContext | null>(null);
   const analyserRef = useRef<AnalyserNode | null>(null);
   const sourceRef = useRef<MediaStreamAudioSourceNode | null>(null);
-  const bpmProcessorRef = useRef<AudioWorkletNode | null>(null);
+  const bpmAnalyzerRef = useRef<BpmAnalyzer | null>(null);
   const animationRef = useRef<number | null>(null);
   const lastSampleTimeRef = useRef<number>(0);
   const streamRef = useRef<MediaStream | null>(null);
@@ -177,37 +177,38 @@ export function useAdaptiveAudio(): AdaptiveAudioResult {
         const lowpassFilter = getBiquadFilter(audioContext);
         source.connect(lowpassFilter);
 
-        // Create BPM processor
-        const realtimeBpmProcessor = await createRealTimeBpmProcessor(audioContext, {
+        // Create BPM analyzer
+        const bpmAnalyzer = await createRealtimeBpmAnalyzer(audioContext, {
           continuousAnalysis: true,
           stabilizationTime: 5000, // 5 seconds to stabilize
         });
-        bpmProcessorRef.current = realtimeBpmProcessor;
+        bpmAnalyzerRef.current = bpmAnalyzer;
 
-        lowpassFilter.connect(realtimeBpmProcessor);
+        // Connect using .node property (AudioWorkletNode)
+        lowpassFilter.connect(bpmAnalyzer.node);
 
-        // Listen for BPM events
-        realtimeBpmProcessor.port.onmessage = (event) => {
-          if (event.data.message === 'BPM') {
-            const { bpm, confidence } = event.data.result;
-            if (bpm && confidence) {
-              setAdaptiveState(prev => ({
-                ...prev,
-                bpm: Math.round(bpm),
-                bpmConfidence: confidence,
-              }));
-            }
-          } else if (event.data.message === 'BPM_STABLE') {
-            const { bpm, confidence } = event.data.result;
-            if (bpm) {
-              setAdaptiveState(prev => ({
-                ...prev,
-                bpm: Math.round(bpm),
-                bpmConfidence: confidence || 1,
-              }));
-            }
+        // Listen for BPM events using event emitter API
+        bpmAnalyzer.on('bpm', (data) => {
+          if (data.bpm && data.bpm.length > 0) {
+            const topResult = data.bpm[0];
+            setAdaptiveState(prev => ({
+              ...prev,
+              bpm: Math.round(topResult.tempo),
+              bpmConfidence: Math.min(1, topResult.count / 100), // Normalize count to 0-1
+            }));
           }
-        };
+        });
+
+        bpmAnalyzer.on('bpmStable', (data) => {
+          if (data.bpm && data.bpm.length > 0) {
+            const topResult = data.bpm[0];
+            setAdaptiveState(prev => ({
+              ...prev,
+              bpm: Math.round(topResult.tempo),
+              bpmConfidence: 1, // Stable = full confidence
+            }));
+          }
+        });
       } catch (bpmError) {
         console.warn('BPM detection not available:', bpmError);
         // Continue without BPM detection
@@ -226,8 +227,8 @@ export function useAdaptiveAudio(): AdaptiveAudioResult {
     if (animationRef.current) {
       cancelAnimationFrame(animationRef.current);
     }
-    if (bpmProcessorRef.current) {
-      bpmProcessorRef.current.disconnect();
+    if (bpmAnalyzerRef.current) {
+      bpmAnalyzerRef.current.stop();
     }
     if (sourceRef.current) {
       sourceRef.current.disconnect();
