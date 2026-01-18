@@ -6,7 +6,18 @@ Audio-reactive metaball visualization engine with wavefront expansion animation,
 
 ## Current State (January 2026)
 
-**Working visualization** with 3-cluster system, audio reactivity, and two animation modes.
+**Working visualization** with unified intensity-based animation, BPM detection, and 6 enhancement phases complete.
+
+### v2 - Intensity-Based System (January 18, 2026)
+
+Major upgrade implementing all 6 user-requested enhancements:
+
+1. **Unified Motion System** - Smooth intensity spectrum (0-1) replaces binary drift/expansion mode
+2. **Intensity-Driven Colors** - Cool (purple/blue/teal) at low intensity → warm (pink/orange) at high
+3. **Always-On Center Gravity** - Strength scales WITH intensity (creates "frenzy concentrated in middle")
+4. **Cluster Size Pulsing** - Each cluster randomly grows (1.5x) or shrinks (0.75x) every 3-6s
+5. **Blob-to-Blob Influence** - Nearby blobs affect each other's size and direction (like color blending)
+6. **BPM Detection** - Real-time BPM via `realtime-bpm-analyzer` library
 
 ### Baseline v1 - "Beautiful" (January 16, 2026)
 
@@ -19,37 +30,39 @@ Reference screenshots saved in `docs/reference-screenshots/baseline-v1-*.png`
 
 This configuration represents a validated aesthetic baseline. Future audio sensitivity tweaks should preserve this visual character.
 
-### Animation Modes
-- **Expanding** (💥): Active wavefront expansion when audio amplitude exceeds adaptive threshold
-- **Drift** (🌊): Calm ambient swirling when quiet, with center gravity + breathing effect
+### Unified Intensity System (v2)
+
+Animation behaviors blend smoothly on a 0-1 **intensity** scale:
+- 🌊 **Low intensity (0-0.3)**: Calm swirling, strong drift physics, cool colors (purple/blue/teal)
+- 🔥 **Medium intensity (0.3-0.7)**: Blended behaviors, transitional colors
+- 💥 **High intensity (0.7-1.0)**: Active expansion, fast spawning, warm colors (pink/orange)
+
+**Key behaviors that scale with intensity:**
+- Drift physics strength: `1 - intensity * 0.7` (stronger when calm)
+- Expansion physics strength: `intensity` (stronger when energetic)
+- Center gravity: `base + intensity * boost` (creates frenzy in middle at high intensity)
+- Spawn rate: Faster at high intensity + bass hits
+- Color palette: Interpolates cool→warm based on intensity
+- Breathing effect: Stronger at low intensity
 
 ### Adaptive Audio System (January 2026)
 
-Self-calibrating audio interpretation that adjusts to any volume level or music style.
+Self-calibrating audio interpretation with BPM detection.
 
-**How it works:**
-1. Rolling 60-second window of amplitude history
-2. Calculates statistics (min, max, mean, stdDev) from recent history
-3. Tracks actual time spent in drift vs expanding mode
-4. Continuously adjusts threshold to achieve target drift ratio (~30%)
+**Intensity calculation:**
+1. Rolling 60-second amplitude history
+2. Statistics (min, max, mean, stdDev) from recent history
+3. Energy derivative (rate of change) for responsiveness
+4. Combined normalized amplitude + derivative boost
+5. Exponential smoothing for stable output
 
-**Configuration:**
-| Parameter | Value | Purpose |
-|-----------|-------|---------|
-| History Duration | 60s | Window for statistics calculation |
-| Sample Interval | 100ms | How often to record amplitude |
-| Target Drift Ratio | 30% | Desired time in drift mode |
-| Threshold Adjust Rate | 0.001 | Speed of threshold adaptation |
-| Min Threshold | 0.01 | Floor for sensitivity |
-| Max Threshold | 0.50 | Ceiling for sensitivity |
+**BPM detection** via `realtime-bpm-analyzer`:
+- Low-pass filter isolates bass frequencies
+- Emits 'bpm' events during analysis
+- Emits 'bpmStable' when confident
+- ~5 seconds to stabilize
 
-**Behavior:**
-- If spending too little time in drift → raises threshold (harder to trigger expanding)
-- If spending too much time in drift → lowers threshold (easier to trigger expanding)
-- Adapts gradually to avoid jarring transitions
-- Works equally well for quiet ambient music or loud electronic
-
-**Display:** Stats panel shows current drift ratio and adaptive threshold when listening.
+**Display:** Stats panel shows intensity %, BPM, confidence, and threshold.
 
 ### 3-Cluster System
 Blobs assigned to clusters by ID, creating visual variety:
@@ -259,74 +272,55 @@ Formula: `blur=16`, `alpha = blur × 6 = 96`, `shift = alpha / -2 = -48`
 
 ---
 
-## Future Enhancement: BPM & Intensity-Driven Animation (January 17, 2026)
+## Implemented: BPM & Intensity-Driven Animation (January 18, 2026)
 
-*User direction - verbatim quotes preserved*
+✅ **All 6 enhancements implemented** - see v2 section above.
 
-### 1. BPM/Intensity Color Variation
+*User direction preserved for reference:*
+
+### 1. ✅ BPM/Intensity Color Variation
 > "Make it vary the color (but only introduce more reddish orange hues and more neon pink and toward neon purple/blue/teal/turquoise) based on the estimated BPM / intensity of the music"
 
-**Color direction**: Low intensity → purple/blue/teal/turquoise (cool). High intensity → neon pink, reddish orange (warm/hot).
+**Implementation**: Two color palettes interpolate based on intensity:
+- Cool (low): Purple 270°, Teal 200°, Blue 230°
+- Warm (high): Neon Pink 320°, Hot Pink 345°, Orange 25°
 
-### 2. BPM/Intensity Speed Variation
-> "and the speed of movement of all blobs based on the estimated BPM / intensity of the music"
+### 2. ✅ BPM/Intensity Speed Variation
+Expansion physics strength scales directly with intensity. BPM detected and displayed.
 
-### 3. Smooth Spectrum Between Modes
-> "The drift vs expansion modes are too distinct, the difference should be a smooth spectrum instead... Understand exactly what differs and combine it with the above mentioned BPM/intensity variation."
+### 3. ✅ Smooth Spectrum Between Modes
+Binary mode switching replaced with continuous intensity blending (0-1 scale).
 
-**Current mode differences:**
+### 4. ✅ Always-On Center Gravity
+`centerGravityStrength = 0.00002 + (intensity * 0.00008)` - stronger pull at high intensity.
 
-| Aspect | Drift Mode | Expanding Mode |
-|--------|------------|----------------|
-| Movement | Swirling, direction wobble | Outward velocity vectors |
-| Center gravity | ✅ Active | ❌ None |
-| Spawning | ❌ None | ✅ From frontier |
-| Speed variation | Per-blob oscillating | Mid-frequency boost |
-| Boundary containment | ✅ Soft edges | ❌ Recycle at edge |
+### 5. ✅ Cluster Size Pulsing
+Each cluster pulses every 3-6s: grow to 1.5x OR shrink to 0.75x over 1s (easeInOut).
 
-**Goal**: Blend these behaviors on a 0-1 intensity scale, not binary switch.
-
-### 4. Always-On Center Gravity
-> "The drift mode has a centering effect right? That if blobs get too far out they're gravitating toward the center? Make that always be the case but just stronger when intensity is higher, so they get into a frenzy slightly more concentrated into the middle of the screen."
-
-**Behavior**: `centerGravityStrength = baseStrength + (intensity * intensityBoost)`
-
-### 5. Cluster Size Pulsing
-> "The size / speed variation for the different blob clusters, is it static - the blobs within one cluster have the same size over their whole life? Perhaps each cluster could, each 3-6s (randomly how often), slowly grow (over 1s) to (up to) 1.5x their size OR shrink (over 1s) to (down to) 0.75x their size (randomly)?"
-
-**Implementation**: Per-cluster pulse state with random timing.
-
-### 6. Blob-to-Blob Influence (Size & Direction)
-> "Could blobs size and direction be affected by other blobs they come in close contact with, just like they blend colors when they're close?"
-
-**Existing**: Color blending when `distance < COLOR_BLEND_RADIUS` (80px).
-**Proposed**: Add size influence (larger neighbors make you larger) and direction influence (align with nearby blob movement).
+### 6. ✅ Blob-to-Blob Influence
+- **Direction**: Nearby blobs align velocities (flocking behavior)
+- **Size**: Larger neighbors make this blob slightly larger
+- Radius: 80px (same as color blending)
 
 ---
 
-## BPM Detection Research (January 17, 2026)
+## BPM Detection Implementation (January 18, 2026)
 
-### Recommended Libraries
+**Library**: `realtime-bpm-analyzer` (zero dependencies, TypeScript)
 
-| Library | Approach | Real-time | Microphone | Notes |
-|---------|----------|-----------|------------|-------|
-| **realtime-bpm-analyzer** | Peak detection + interval analysis | ✅ Yes | ✅ Yes | Zero dependencies, TypeScript, emits 'bpm' and 'bpmStable' events |
-| web-audio-beat-detector | Joe Sullivan algorithm | ❌ Offline | ❌ No | Good for electronic music, returns Promise with BPM |
+**Setup**:
+```typescript
+const lowpassFilter = getBiquadFilter(audioContext);
+source.connect(lowpassFilter);
 
-### Core Algorithm (Joe Sullivan / Beatport)
-1. **Low-pass filter** - Isolate bass frequencies (kick drums)
-2. **Peak detection** - Find amplitude spikes above threshold
-3. **Interval analysis** - Measure time between peaks
-4. **Tempo calculation** - Convert intervals to BPM
+const bpmAnalyzer = await createRealtimeBpmAnalyzer(audioContext, {
+  continuousAnalysis: true,
+  stabilizationTime: 5000,
+});
+lowpassFilter.connect(bpmAnalyzer.node);
 
-### Simpler Real-Time Approach (Energy-Based)
-For real-time visualization, full BPM detection may be overkill. Alternative:
-1. Track **energy** (RMS amplitude) per frame
-2. Compare to **rolling average** - spikes = beats
-3. Use **energy derivative** (rate of change) for intensity
-4. Map intensity (0-1) directly to animation parameters
+bpmAnalyzer.on('bpm', (data) => { /* update BPM state */ });
+bpmAnalyzer.on('bpmStable', (data) => { /* confident detection */ });
+```
 
-### Implementation Considerations
-- Full BPM detection needs ~5-10 seconds of audio to stabilize
-- Energy-based intensity detection is instantaneous
-- Could use hybrid: energy for immediate response, BPM for tempo-synced effects
+**Hybrid approach**: Energy-based intensity for immediate response + BPM for display/future tempo sync.
