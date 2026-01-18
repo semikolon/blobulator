@@ -53,6 +53,20 @@ const CLUSTER_HUE_RANGES_WARM = [
   { base: 25, spread: 30 },    // Cluster 2: Orange/coral
 ];
 
+// Cluster size pulsing configuration
+// Each cluster randomly grows or shrinks on its own schedule
+const PULSE_DURATION_MS = 1000;        // 1 second to complete pulse
+const PULSE_INTERVAL_MIN_MS = 3000;    // Minimum 3 seconds between pulses
+const PULSE_INTERVAL_MAX_MS = 6000;    // Maximum 6 seconds between pulses
+const PULSE_GROW_SCALE = 1.5;          // Grow to 150% size
+const PULSE_SHRINK_SCALE = 0.75;       // Shrink to 75% size
+
+interface ClusterPulseState {
+  targetScale: number;      // 1.0, 1.5, or 0.75
+  pulseStartTime: number;   // When current pulse started
+  nextPulseTime: number;    // When to trigger next pulse
+}
+
 // Get cluster index from blob ID (uses random part for even distribution)
 function getClusterIndex(blobId: string): number {
   const randomPart = blobId.split('-')[1] || blobId;
@@ -162,6 +176,59 @@ export function Blobulator() {
   const lastSpawnRef = useRef<number>(0);
   const elapsedRef = useRef<number>(0);
   const lastFrameRef = useRef<number>(0);
+
+  // Cluster pulse state - each cluster pulses independently
+  const clusterPulsesRef = useRef<ClusterPulseState[]>([
+    { targetScale: 1.0, pulseStartTime: 0, nextPulseTime: 2000 },
+    { targetScale: 1.0, pulseStartTime: 0, nextPulseTime: 3500 },
+    { targetScale: 1.0, pulseStartTime: 0, nextPulseTime: 5000 },
+  ]);
+
+  // Calculate current pulse multiplier for a cluster with smooth easing
+  const getClusterPulseMultiplier = useCallback((clusterIndex: number, elapsed: number): number => {
+    const pulse = clusterPulsesRef.current[clusterIndex];
+
+    // Check if it's time to start a new pulse
+    if (elapsed >= pulse.nextPulseTime && pulse.targetScale === 1.0) {
+      // Start new pulse - randomly grow or shrink
+      pulse.targetScale = Math.random() > 0.5 ? PULSE_GROW_SCALE : PULSE_SHRINK_SCALE;
+      pulse.pulseStartTime = elapsed;
+    }
+
+    // If not pulsing, return 1.0
+    if (pulse.targetScale === 1.0) {
+      return 1.0;
+    }
+
+    // Calculate pulse progress (0 to 1)
+    const pulseElapsed = elapsed - pulse.pulseStartTime;
+    const progress = Math.min(1, pulseElapsed / PULSE_DURATION_MS);
+
+    // Ease in-out for smooth animation
+    const easedProgress = progress < 0.5
+      ? 2 * progress * progress
+      : 1 - Math.pow(-2 * progress + 2, 2) / 2;
+
+    // Pulse goes: 1.0 → target → 1.0 (there and back)
+    let multiplier: number;
+    if (easedProgress < 0.5) {
+      // Going toward target
+      multiplier = 1.0 + (pulse.targetScale - 1.0) * (easedProgress * 2);
+    } else {
+      // Returning to normal
+      multiplier = pulse.targetScale + (1.0 - pulse.targetScale) * ((easedProgress - 0.5) * 2);
+    }
+
+    // Pulse complete - schedule next one
+    if (progress >= 1) {
+      pulse.targetScale = 1.0;
+      const randomInterval = PULSE_INTERVAL_MIN_MS +
+        Math.random() * (PULSE_INTERVAL_MAX_MS - PULSE_INTERVAL_MIN_MS);
+      pulse.nextPulseTime = elapsed + randomInterval;
+    }
+
+    return multiplier;
+  }, []);
 
   // Intensity (0-1) drives all animation blending - no binary mode switching
   // BPM detection provides tempo for future rhythm-synced effects
@@ -310,7 +377,10 @@ export function Blobulator() {
     const breathingAmount = (1 - intensity) * getSizeBreathingMultiplier(elapsedRef.current, index);
     const breathingMultiplier = 1 + (breathingAmount - 1) * (1 - intensity);
 
-    return baseSize * blobVariation * amplitudeBoost * midWobble * breathingMultiplier;
+    // Cluster-wide pulsing - each cluster grows/shrinks together every 3-6s
+    const clusterPulseMultiplier = getClusterPulseMultiplier(clusterIndex, elapsedRef.current);
+
+    return baseSize * blobVariation * amplitudeBoost * midWobble * breathingMultiplier * clusterPulseMultiplier;
   };
 
   // Calculate base HSL color for a blob (without neighbor blending)
