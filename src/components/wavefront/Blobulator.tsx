@@ -34,10 +34,12 @@ const CLUSTERS = [
   { sizeMultiplier: 1.5, speedMultiplier: 0.6, centerOffset: { x: 180, y: -50 } },    // Large & slow
 ];
 
-// Color blending configuration
-const COLOR_BLEND_RADIUS = 80;      // Pixels - blobs within this distance blend colors
-const COLOR_BLEND_STRENGTH = 0.5;   // 0-1 - more blending for smoother color transitions
-const COLOR_BLEND_MIN_AGE = 3000;   // ms - start blending sooner
+// Blob interaction configuration - affects color, size, and direction
+const BLOB_INFLUENCE_RADIUS = 80;      // Pixels - blobs within this distance influence each other
+const COLOR_BLEND_STRENGTH = 0.5;      // 0-1 - color blending intensity
+const SIZE_INFLUENCE_STRENGTH = 0.15;  // 0-1 - how much neighbors affect size (larger neighbors = bigger)
+const DIRECTION_INFLUENCE_STRENGTH = 0.08; // 0-1 - how much to align with neighbor velocities
+const INFLUENCE_MIN_AGE = 3000;        // ms - start influencing after this age
 
 // Cluster color palettes - shift based on intensity
 // Low intensity (calm): Cool colors (purple, blue, teal, turquoise)
@@ -307,7 +309,44 @@ export function Blobulator() {
         }
       }
 
-      // 4. Spawning - rate scales with intensity and bass
+      // 4. Blob-to-blob direction influence - nearby blobs align velocities
+      //    Similar to flocking behavior, creates more organic flow
+      for (let i = 0; i < updatedBlobs.length; i++) {
+        const blob = updatedBlobs[i];
+        if (blob.age < INFLUENCE_MIN_AGE) continue;
+
+        let avgVx = 0;
+        let avgVy = 0;
+        let neighborCount = 0;
+
+        for (let j = 0; j < updatedBlobs.length; j++) {
+          if (i === j) continue;
+          const other = updatedBlobs[j];
+          if (other.age < INFLUENCE_MIN_AGE) continue;
+
+          const dx = blob.x - other.x;
+          const dy = blob.y - other.y;
+          const distance = Math.sqrt(dx * dx + dy * dy);
+
+          if (distance < BLOB_INFLUENCE_RADIUS && distance > 0) {
+            // Weight by inverse distance (closer = stronger influence)
+            const weight = 1 - (distance / BLOB_INFLUENCE_RADIUS);
+            avgVx += other.vx * weight;
+            avgVy += other.vy * weight;
+            neighborCount += weight;
+          }
+        }
+
+        // Apply direction influence (blend toward neighbor average)
+        if (neighborCount > 0) {
+          avgVx /= neighborCount;
+          avgVy /= neighborCount;
+          blob.vx += (avgVx - blob.vx) * DIRECTION_INFLUENCE_STRENGTH * deltaMs * 0.01;
+          blob.vy += (avgVy - blob.vy) * DIRECTION_INFLUENCE_STRENGTH * deltaMs * 0.01;
+        }
+      }
+
+      // 5. Spawning - rate scales with intensity and bass
       //    Even at low intensity, occasional spawning keeps things alive
       const baseSpawnInterval = config.spawnIntervalMs;
       const intensitySpawnBoost = intensity * 400;  // Faster spawning at high intensity
@@ -380,7 +419,40 @@ export function Blobulator() {
     // Cluster-wide pulsing - each cluster grows/shrinks together every 3-6s
     const clusterPulseMultiplier = getClusterPulseMultiplier(clusterIndex, elapsedRef.current);
 
-    return baseSize * blobVariation * amplitudeBoost * midWobble * breathingMultiplier * clusterPulseMultiplier;
+    // Neighbor size influence - nearby larger blobs make this blob slightly larger
+    let neighborSizeInfluence = 1.0;
+    if (blob.age >= INFLUENCE_MIN_AGE) {
+      let totalInfluence = 0;
+      let totalWeight = 0;
+
+      for (let i = 0; i < blobs.length; i++) {
+        if (i === index) continue;
+        const other = blobs[i];
+        if (other.age < INFLUENCE_MIN_AGE) continue;
+
+        const dx = blob.x - other.x;
+        const dy = blob.y - other.y;
+        const distance = Math.sqrt(dx * dx + dy * dy);
+
+        if (distance < BLOB_INFLUENCE_RADIUS && distance > 0) {
+          const weight = 1 - (distance / BLOB_INFLUENCE_RADIUS);
+          // Compare sizes - if neighbor is larger, influence is positive
+          const sizeRatio = other.size / blob.size;
+          totalInfluence += (sizeRatio - 1) * weight;
+          totalWeight += weight;
+        }
+      }
+
+      if (totalWeight > 0) {
+        const avgInfluence = totalInfluence / totalWeight;
+        // Apply gentle size influence (larger neighbors = slightly bigger)
+        neighborSizeInfluence = 1 + avgInfluence * SIZE_INFLUENCE_STRENGTH;
+        // Clamp to reasonable range
+        neighborSizeInfluence = Math.max(0.8, Math.min(1.2, neighborSizeInfluence));
+      }
+    }
+
+    return baseSize * blobVariation * amplitudeBoost * midWobble * breathingMultiplier * clusterPulseMultiplier * neighborSizeInfluence;
   };
 
   // Calculate base HSL color for a blob (without neighbor blending)
@@ -429,7 +501,7 @@ export function Blobulator() {
     const baseColor = getBlobBaseHSL(blob);
 
     // Skip blending for young blobs - prevents "infection" in spawn pool
-    if (blob.age < COLOR_BLEND_MIN_AGE) {
+    if (blob.age < INFLUENCE_MIN_AGE) {
       return `hsl(${baseColor.h}, ${baseColor.s}%, ${baseColor.l}%)`;
     }
 
@@ -445,15 +517,15 @@ export function Blobulator() {
       const other = blobs[i];
 
       // Only blend with other mature blobs
-      if (other.age < COLOR_BLEND_MIN_AGE) continue;
+      if (other.age < INFLUENCE_MIN_AGE) continue;
 
       const dx = blob.x - other.x;
       const dy = blob.y - other.y;
       const distance = Math.sqrt(dx * dx + dy * dy);
 
-      if (distance < COLOR_BLEND_RADIUS) {
+      if (distance < BLOB_INFLUENCE_RADIUS) {
         // Weight falls off with distance (1 at center, 0 at radius edge)
-        const weight = 1 - (distance / COLOR_BLEND_RADIUS);
+        const weight = 1 - (distance / BLOB_INFLUENCE_RADIUS);
         const otherColor = getBlobBaseHSL(other);
 
         // Handle hue wrapping (e.g., 350° and 10° should average to 0°, not 180°)
