@@ -233,3 +233,100 @@ audio.play();
 1. **BlackHole setup** - best flexibility, works now with mic input
 2. **Own audio playback** - simple addition for demos
 3. **Tab audio** - nice-to-have for Chrome users
+
+---
+
+## SVG Gooey Filter Insight (January 17, 2026)
+
+**Key discovery**: The `feComposite in="SourceGraphic"` step in SVG gooey filters composites SHARP original circles back on top of the blur. Removing it creates truly merged internal blobs.
+
+| Filter Approach | Internal Blob Edges | Use Case |
+|-----------------|---------------------|----------|
+| With `feComposite` | Sharp circles visible inside mass | Distinct blob identity |
+| **Without `feComposite`** | Soft, merged, lava-lamp effect | True metaball merging |
+
+**gooey-react library** defaults to `composite=false` (no feComposite). brf-auto already uses this correctly.
+
+**Current blobulator filter** (strong intensity, no composite):
+```svg
+<filter id="goo" colorInterpolationFilters="sRGB">
+  <feGaussianBlur in="SourceGraphic" stdDeviation="16" />
+  <feColorMatrix values="1 0 0 0 0  0 1 0 0 0  0 0 1 0 0  0 0 0 96 -48" />
+</filter>
+```
+
+Formula: `blur=16`, `alpha = blur × 6 = 96`, `shift = alpha / -2 = -48`
+
+---
+
+## Future Enhancement: BPM & Intensity-Driven Animation (January 17, 2026)
+
+*User direction - verbatim quotes preserved*
+
+### 1. BPM/Intensity Color Variation
+> "Make it vary the color (but only introduce more reddish orange hues and more neon pink and toward neon purple/blue/teal/turquoise) based on the estimated BPM / intensity of the music"
+
+**Color direction**: Low intensity → purple/blue/teal/turquoise (cool). High intensity → neon pink, reddish orange (warm/hot).
+
+### 2. BPM/Intensity Speed Variation
+> "and the speed of movement of all blobs based on the estimated BPM / intensity of the music"
+
+### 3. Smooth Spectrum Between Modes
+> "The drift vs expansion modes are too distinct, the difference should be a smooth spectrum instead... Understand exactly what differs and combine it with the above mentioned BPM/intensity variation."
+
+**Current mode differences:**
+
+| Aspect | Drift Mode | Expanding Mode |
+|--------|------------|----------------|
+| Movement | Swirling, direction wobble | Outward velocity vectors |
+| Center gravity | ✅ Active | ❌ None |
+| Spawning | ❌ None | ✅ From frontier |
+| Speed variation | Per-blob oscillating | Mid-frequency boost |
+| Boundary containment | ✅ Soft edges | ❌ Recycle at edge |
+
+**Goal**: Blend these behaviors on a 0-1 intensity scale, not binary switch.
+
+### 4. Always-On Center Gravity
+> "The drift mode has a centering effect right? That if blobs get too far out they're gravitating toward the center? Make that always be the case but just stronger when intensity is higher, so they get into a frenzy slightly more concentrated into the middle of the screen."
+
+**Behavior**: `centerGravityStrength = baseStrength + (intensity * intensityBoost)`
+
+### 5. Cluster Size Pulsing
+> "The size / speed variation for the different blob clusters, is it static - the blobs within one cluster have the same size over their whole life? Perhaps each cluster could, each 3-6s (randomly how often), slowly grow (over 1s) to (up to) 1.5x their size OR shrink (over 1s) to (down to) 0.75x their size (randomly)?"
+
+**Implementation**: Per-cluster pulse state with random timing.
+
+### 6. Blob-to-Blob Influence (Size & Direction)
+> "Could blobs size and direction be affected by other blobs they come in close contact with, just like they blend colors when they're close?"
+
+**Existing**: Color blending when `distance < COLOR_BLEND_RADIUS` (80px).
+**Proposed**: Add size influence (larger neighbors make you larger) and direction influence (align with nearby blob movement).
+
+---
+
+## BPM Detection Research (January 17, 2026)
+
+### Recommended Libraries
+
+| Library | Approach | Real-time | Microphone | Notes |
+|---------|----------|-----------|------------|-------|
+| **realtime-bpm-analyzer** | Peak detection + interval analysis | ✅ Yes | ✅ Yes | Zero dependencies, TypeScript, emits 'bpm' and 'bpmStable' events |
+| web-audio-beat-detector | Joe Sullivan algorithm | ❌ Offline | ❌ No | Good for electronic music, returns Promise with BPM |
+
+### Core Algorithm (Joe Sullivan / Beatport)
+1. **Low-pass filter** - Isolate bass frequencies (kick drums)
+2. **Peak detection** - Find amplitude spikes above threshold
+3. **Interval analysis** - Measure time between peaks
+4. **Tempo calculation** - Convert intervals to BPM
+
+### Simpler Real-Time Approach (Energy-Based)
+For real-time visualization, full BPM detection may be overkill. Alternative:
+1. Track **energy** (RMS amplitude) per frame
+2. Compare to **rolling average** - spikes = beats
+3. Use **energy derivative** (rate of change) for intensity
+4. Map intensity (0-1) directly to animation parameters
+
+### Implementation Considerations
+- Full BPM detection needs ~5-10 seconds of audio to stabilize
+- Energy-based intensity detection is instantaneous
+- Could use hybrid: energy for immediate response, BPM for tempo-synced effects
