@@ -1,19 +1,21 @@
 /**
  * Adaptive Audio Analysis Hook
  *
- * Self-calibrating audio interpretation that adjusts to any volume level or music style.
+ * Self-calibrating audio interpretation with BPM detection and intensity tracking.
  *
  * Key features:
  * 1. Rolling 60-second window of amplitude history
  * 2. Normalizes current amplitude relative to recent min/max/variance
- * 3. Target drift proportion (default 30%) - auto-adjusts threshold to achieve this
- * 4. Smooth threshold adjustments to avoid jarring transitions
+ * 3. BPM detection via realtime-bpm-analyzer library
+ * 4. Energy-based intensity (0-1 continuous scale)
+ * 5. Smooth transitions for all values
  *
  * This ensures the visualization works well whether you're playing quiet ambient
  * music or loud electronic - it adapts to the dynamic range of whatever is playing.
  */
 
 import { useState, useEffect, useRef, useCallback } from 'react';
+import { createRealTimeBpmProcessor, getBiquadFilter } from 'realtime-bpm-analyzer';
 import type { AudioFeatures } from './types';
 
 // Configuration constants
@@ -21,22 +23,25 @@ const HISTORY_DURATION_MS = 60_000;  // 60 seconds of history
 const SAMPLE_INTERVAL_MS = 100;      // Sample every 100ms
 const MAX_SAMPLES = HISTORY_DURATION_MS / SAMPLE_INTERVAL_MS; // 600 samples
 
-const TARGET_DRIFT_RATIO = 0.30;     // Target: 30% of time in drift mode
-const THRESHOLD_ADJUST_RATE = 0.001; // How fast threshold adapts (per sample)
-const MIN_THRESHOLD = 0.04;          // Never go below this - prevents reacting to desk touches/room noise
-const MAX_THRESHOLD = 0.5;           // Never go above this
-const INITIAL_THRESHOLD = 0.05;      // Starting threshold (slightly above min to avoid noise)
+// Intensity smoothing
+const INTENSITY_SMOOTHING = 0.15;    // How fast intensity responds (0=instant, 1=never)
+const ENERGY_HISTORY_SIZE = 10;      // Frames to average for energy comparison
+
+// BPM detection
+const DEFAULT_BPM = 120;             // Fallback BPM before detection stabilizes
 
 interface AdaptiveState {
   amplitudeHistory: number[];
-  modeHistory: ('expanding' | 'drift')[];  // Track which mode we've been in
+  energyHistory: number[];           // Recent energy values for derivative calculation
   adaptiveThreshold: number;
+  smoothedIntensity: number;         // Smoothed 0-1 intensity value
+  bpm: number;                       // Current detected BPM
+  bpmConfidence: number;             // How confident we are in the BPM (0-1)
   stats: {
     min: number;
     max: number;
     mean: number;
     stdDev: number;
-    currentDriftRatio: number;  // Actual % time in drift
   };
 }
 
@@ -45,9 +50,12 @@ interface AdaptiveAudioResult {
   features: AudioFeatures;
   // Normalized features (0-1 relative to recent history)
   normalizedFeatures: AudioFeatures;
-  // Adaptive mode decision
-  mode: 'expanding' | 'drift';
-  // Current adaptive threshold
+  // Continuous intensity (0-1) - replaces binary mode
+  intensity: number;
+  // BPM detection
+  bpm: number;
+  bpmConfidence: number;
+  // Current adaptive threshold (for display)
   adaptiveThreshold: number;
   // Statistics
   stats: AdaptiveState['stats'];
@@ -72,14 +80,16 @@ export function useAdaptiveAudio(): AdaptiveAudioResult {
   // Adaptive state
   const [adaptiveState, setAdaptiveState] = useState<AdaptiveState>({
     amplitudeHistory: [],
-    modeHistory: [],
-    adaptiveThreshold: INITIAL_THRESHOLD,
+    energyHistory: [],
+    adaptiveThreshold: 0.05,
+    smoothedIntensity: 0,
+    bpm: DEFAULT_BPM,
+    bpmConfidence: 0,
     stats: {
       min: 0,
       max: 0.1,
       mean: 0.05,
       stdDev: 0.02,
-      currentDriftRatio: 0.5,
     },
   });
 
@@ -87,11 +97,13 @@ export function useAdaptiveAudio(): AdaptiveAudioResult {
   const audioContextRef = useRef<AudioContext | null>(null);
   const analyserRef = useRef<AnalyserNode | null>(null);
   const sourceRef = useRef<MediaStreamAudioSourceNode | null>(null);
+  const bpmProcessorRef = useRef<AudioWorkletNode | null>(null);
   const animationRef = useRef<number | null>(null);
   const lastSampleTimeRef = useRef<number>(0);
+  const streamRef = useRef<MediaStream | null>(null);
 
   // Calculate statistics from history
-  const calculateStats = useCallback((history: number[]): Omit<AdaptiveState['stats'], 'currentDriftRatio'> => {
+  const calculateStats = useCallback((history: number[]): AdaptiveState['stats'] => {
     if (history.length === 0) {
       return { min: 0, max: 0.1, mean: 0.05, stdDev: 0.02 };
     }
@@ -114,17 +126,92 @@ export function useAdaptiveAudio(): AdaptiveAudioResult {
     return Math.max(0, Math.min(1, (value - min) / range));
   }, []);
 
+  // Calculate energy-based intensity from recent history
+  const calculateIntensity = useCallback((
+    currentAmplitude: number,
+    energyHistory: number[],
+    stats: AdaptiveState['stats']
+  ): number => {
+    if (energyHistory.length < 3) {
+      // Not enough history, use normalized amplitude
+      return normalizeValue(currentAmplitude, stats.min, stats.max);
+    }
+
+    // Calculate average recent energy
+    const recentAvg = energyHistory.reduce((a, b) => a + b, 0) / energyHistory.length;
+
+    // Calculate energy derivative (rate of change)
+    const energyDerivative = currentAmplitude - recentAvg;
+
+    // Combine normalized amplitude with energy derivative for intensity
+    // High amplitude OR rising energy = high intensity
+    const normalizedAmp = normalizeValue(currentAmplitude, stats.min, stats.max);
+    const derivativeBoost = Math.max(0, energyDerivative * 10); // Boost for rising energy
+
+    // Combine: base intensity from amplitude, boosted by energy changes
+    const rawIntensity = Math.min(1, normalizedAmp + derivativeBoost * 0.3);
+
+    return rawIntensity;
+  }, [normalizeValue]);
+
   // Start listening
   const startListening = useCallback(async () => {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      streamRef.current = stream;
 
-      audioContextRef.current = new AudioContext();
-      analyserRef.current = audioContextRef.current.createAnalyser();
-      analyserRef.current.fftSize = 256;
+      const audioContext = new AudioContext();
+      audioContextRef.current = audioContext;
 
-      sourceRef.current = audioContextRef.current.createMediaStreamSource(stream);
-      sourceRef.current.connect(analyserRef.current);
+      const analyser = audioContext.createAnalyser();
+      analyser.fftSize = 256;
+      analyserRef.current = analyser;
+
+      const source = audioContext.createMediaStreamSource(stream);
+      sourceRef.current = source;
+      source.connect(analyser);
+
+      // Set up BPM detection
+      try {
+        // Create low-pass filter for BPM detection (isolates bass/kick)
+        const lowpassFilter = getBiquadFilter(audioContext);
+        source.connect(lowpassFilter);
+
+        // Create BPM processor
+        const realtimeBpmProcessor = await createRealTimeBpmProcessor(audioContext, {
+          continuousAnalysis: true,
+          stabilizationTime: 5000, // 5 seconds to stabilize
+        });
+        bpmProcessorRef.current = realtimeBpmProcessor;
+
+        lowpassFilter.connect(realtimeBpmProcessor);
+
+        // Listen for BPM events
+        realtimeBpmProcessor.port.onmessage = (event) => {
+          if (event.data.message === 'BPM') {
+            const { bpm, confidence } = event.data.result;
+            if (bpm && confidence) {
+              setAdaptiveState(prev => ({
+                ...prev,
+                bpm: Math.round(bpm),
+                bpmConfidence: confidence,
+              }));
+            }
+          } else if (event.data.message === 'BPM_STABLE') {
+            const { bpm, confidence } = event.data.result;
+            if (bpm) {
+              setAdaptiveState(prev => ({
+                ...prev,
+                bpm: Math.round(bpm),
+                bpmConfidence: confidence || 1,
+              }));
+            }
+          }
+        };
+      } catch (bpmError) {
+        console.warn('BPM detection not available:', bpmError);
+        // Continue without BPM detection
+      }
 
       setIsListening(true);
       setError(null);
@@ -139,11 +226,17 @@ export function useAdaptiveAudio(): AdaptiveAudioResult {
     if (animationRef.current) {
       cancelAnimationFrame(animationRef.current);
     }
+    if (bpmProcessorRef.current) {
+      bpmProcessorRef.current.disconnect();
+    }
     if (sourceRef.current) {
       sourceRef.current.disconnect();
     }
     if (audioContextRef.current) {
       audioContextRef.current.close();
+    }
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach(track => track.stop());
     }
     setIsListening(false);
   }, []);
@@ -188,50 +281,48 @@ export function useAdaptiveAudio(): AdaptiveAudioResult {
         lastSampleTimeRef.current = now;
 
         setAdaptiveState(prev => {
-          // Add to history, keeping only last 60s
+          // Add to amplitude history, keeping only last 60s
           const newAmplitudeHistory = [...prev.amplitudeHistory, newFeatures.amplitude];
           if (newAmplitudeHistory.length > MAX_SAMPLES) {
             newAmplitudeHistory.shift();
           }
 
-          // Calculate stats
-          const baseStats = calculateStats(newAmplitudeHistory);
-
-          // Determine current mode based on adaptive threshold
-          const currentMode: 'expanding' | 'drift' = newFeatures.amplitude > prev.adaptiveThreshold ? 'expanding' : 'drift';
-
-          // Track mode history
-          const newModeHistory: ('expanding' | 'drift')[] = [...prev.modeHistory, currentMode];
-          if (newModeHistory.length > MAX_SAMPLES) {
-            newModeHistory.shift();
+          // Add to energy history (shorter window for responsiveness)
+          const newEnergyHistory = [...prev.energyHistory, newFeatures.amplitude];
+          if (newEnergyHistory.length > ENERGY_HISTORY_SIZE) {
+            newEnergyHistory.shift();
           }
 
-          // Calculate actual drift ratio
-          const driftCount = newModeHistory.filter(m => m === 'drift').length;
-          const currentDriftRatio = newModeHistory.length > 0 ? driftCount / newModeHistory.length : 0.5;
+          // Calculate stats
+          const newStats = calculateStats(newAmplitudeHistory);
 
-          // Adjust threshold to move toward target drift ratio
+          // Calculate raw intensity
+          const rawIntensity = calculateIntensity(
+            newFeatures.amplitude,
+            newEnergyHistory,
+            newStats
+          );
+
+          // Smooth the intensity (exponential moving average)
+          const newSmoothedIntensity = prev.smoothedIntensity * INTENSITY_SMOOTHING +
+            rawIntensity * (1 - INTENSITY_SMOOTHING);
+
+          // Update adaptive threshold based on smoothed intensity
+          // This helps maintain the visual character across different music styles
           let newThreshold = prev.adaptiveThreshold;
-          if (newModeHistory.length >= 100) { // Wait for some history before adjusting
-            if (currentDriftRatio < TARGET_DRIFT_RATIO) {
-              // Too little drift - raise threshold (make it harder to be in expanding)
-              newThreshold += THRESHOLD_ADJUST_RATE;
-            } else if (currentDriftRatio > TARGET_DRIFT_RATIO) {
-              // Too much drift - lower threshold (make it easier to be in expanding)
-              newThreshold -= THRESHOLD_ADJUST_RATE;
-            }
-            // Clamp threshold
-            newThreshold = Math.max(MIN_THRESHOLD, Math.min(MAX_THRESHOLD, newThreshold));
+          if (newAmplitudeHistory.length >= 100) {
+            const targetThreshold = newStats.mean + newStats.stdDev * 0.5;
+            newThreshold = prev.adaptiveThreshold * 0.99 + targetThreshold * 0.01;
+            newThreshold = Math.max(0.02, Math.min(0.5, newThreshold));
           }
 
           return {
+            ...prev,
             amplitudeHistory: newAmplitudeHistory,
-            modeHistory: newModeHistory,
+            energyHistory: newEnergyHistory,
             adaptiveThreshold: newThreshold,
-            stats: {
-              ...baseStats,
-              currentDriftRatio,
-            },
+            smoothedIntensity: newSmoothedIntensity,
+            stats: newStats,
           };
         });
       }
@@ -246,23 +337,22 @@ export function useAdaptiveAudio(): AdaptiveAudioResult {
         cancelAnimationFrame(animationRef.current);
       }
     };
-  }, [isListening, calculateStats]);
+  }, [isListening, calculateStats, calculateIntensity]);
 
   // Calculate normalized features
   const normalizedFeatures: AudioFeatures = {
     amplitude: normalizeValue(features.amplitude, adaptiveState.stats.min, adaptiveState.stats.max),
-    bass: features.bass,    // Could normalize these too if needed
+    bass: features.bass,
     mid: features.mid,
     treble: features.treble,
   };
 
-  // Determine mode
-  const mode = features.amplitude > adaptiveState.adaptiveThreshold ? 'expanding' : 'drift';
-
   return {
     features,
     normalizedFeatures,
-    mode,
+    intensity: adaptiveState.smoothedIntensity,
+    bpm: adaptiveState.bpm,
+    bpmConfidence: adaptiveState.bpmConfidence,
     adaptiveThreshold: adaptiveState.adaptiveThreshold,
     stats: adaptiveState.stats,
     isListening,
