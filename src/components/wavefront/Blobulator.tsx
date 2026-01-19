@@ -24,11 +24,11 @@ import {
 import { getSizeBreathingMultiplier } from './drift';
 import { useAdaptiveAudio } from './useAdaptiveAudio';
 
-// 3 Cluster configurations - different sizes and speeds
+// 3 Cluster configurations - more dramatic size differences
 const CLUSTERS = [
-  { sizeMultiplier: 0.7, speedMultiplier: 1.4, centerOffset: { x: -150, y: -100 } },  // Small & fast
+  { sizeMultiplier: 0.5, speedMultiplier: 1.6, centerOffset: { x: -150, y: -100 } },  // Tiny & very fast
   { sizeMultiplier: 1.0, speedMultiplier: 1.0, centerOffset: { x: 0, y: 50 } },       // Medium & normal
-  { sizeMultiplier: 1.5, speedMultiplier: 0.6, centerOffset: { x: 180, y: -50 } },    // Large & slow
+  { sizeMultiplier: 2.0, speedMultiplier: 0.5, centerOffset: { x: 180, y: -50 } },    // Large & slow
 ];
 
 // Blob interaction configuration - affects color, size, and direction
@@ -70,8 +70,13 @@ const DEATH_RATE_CALM = 0.3;          // Blobs/second dying when intensity < 70%
 const DEATH_RATE_INTENSE = 0.2;       // Blobs/second dying when intensity > 70% (barely any)
 const INTENSITY_THRESHOLD = 0.7;      // Below this: slightly more die than spawn
 
-// Note: Cluster pulsing constants removed (feature disabled)
-// Can be re-added from git history if needed
+// Dynamic gravity centers - form where blobs congregate
+const MAX_GRAVITY_CENTERS = 3;        // Maximum active gravity wells
+const GRAVITY_CENTER_RADIUS = 150;    // Radius to detect blob clusters
+const GRAVITY_CENTER_MIN_BLOBS = 8;   // Min blobs to form a gravity center
+const GRAVITY_CENTER_STRENGTH = 0.000025;  // Pull strength per center
+const GRAVITY_CENTER_UPDATE_MS = 500; // How often to recalculate centers
+const FIXED_CENTER_GRAVITY = 0.000001; // Much weaker fixed center (was 0.000008)
 
 // Get cluster index from blob ID (uses random part for even distribution)
 function getClusterIndex(blobId: string): number {
@@ -212,6 +217,10 @@ export function Blobulator() {
   const seedingStartTimeRef = useRef<number>(0);
   const lastSeedSecondRef = useRef<number>(-1);  // Track which second of seeding we're in
 
+  // Dynamic gravity centers - form where blobs congregate
+  const gravityCentersRef = useRef<Array<{ x: number; y: number; strength: number }>>([]);
+  const lastGravityUpdateRef = useRef<number>(0);
+
   // Display time (updated once per second to avoid excessive re-renders)
   const [displayTime, setDisplayTime] = useState(0);
 
@@ -219,14 +228,16 @@ export function Blobulator() {
   // Low BPM (70) = 0 (calm), High BPM (150) = 1 (energetic)
   const bpmNormalized = Math.max(0, Math.min(1, (bpm - BPM_MIN) / (BPM_MAX - BPM_MIN)));
 
-  // Create a new blob at random position near center
+  // Create a new blob at random position across the viewport
+  // Uses padding to keep blobs slightly away from edges
   const createRandomBlob = useCallback((): WaveFrontBlob => {
-    const angle = Math.random() * Math.PI * 2;
-    const distance = Math.random() * 150 + 50;  // 50-200px from center
+    const padding = 100; // Stay this far from edges
+    const maxX = (viewport.width / 2) - padding;
+    const maxY = (viewport.height / 2) - padding;
     return {
       id: `blob-${Math.random().toString(36).slice(2, 11)}`,
-      x: Math.cos(angle) * distance,
-      y: Math.sin(angle) * distance,
+      x: (Math.random() - 0.5) * 2 * maxX,  // Random position across width
+      y: (Math.random() - 0.5) * 2 * maxY,  // Random position across height
       vx: (Math.random() - 0.5) * 0.5,
       vy: (Math.random() - 0.5) * 0.5,
       direction: Math.random() * Math.PI * 2,
@@ -236,7 +247,7 @@ export function Blobulator() {
       isFrontier: true,
       colorIndex: Math.floor(Math.random() * 5),
     };
-  }, [config.baseBlobSize]);
+  }, [config.baseBlobSize, viewport.width, viewport.height]);
 
   // Initialize timing refs
   useEffect(() => {
@@ -432,25 +443,72 @@ export function Blobulator() {
         blob.direction += curlAngle * 0.0016 * deltaMs * driftFactor;
       }
 
-      // Center gravity - gentle pull, keeps blobs from dispersing too far
-      const centerGravityBase = 0.0000032;  // 2.5x reduction from 0.000008
-      const centerGravityBpmBoost = 0.000006;  // Scaled proportionally
-      const centerGravityStrength = centerGravityBase + bpmNormalized * centerGravityBpmBoost;
+      // === DYNAMIC GRAVITY CENTERS ===
+      // Periodically detect clusters and update gravity centers
+      const now = performance.now();
+      if (now - lastGravityUpdateRef.current > GRAVITY_CENTER_UPDATE_MS) {
+        lastGravityUpdateRef.current = now;
+
+        // Find blob clusters using simple grid-based density detection
+        const cellSize = GRAVITY_CENTER_RADIUS;
+        const densityMap = new Map<string, { x: number; y: number; count: number; sumX: number; sumY: number }>();
+
+        for (const blob of updatedBlobs) {
+          const cellX = Math.floor(blob.x / cellSize);
+          const cellY = Math.floor(blob.y / cellSize);
+          const key = `${cellX},${cellY}`;
+
+          if (!densityMap.has(key)) {
+            densityMap.set(key, { x: cellX, y: cellY, count: 0, sumX: 0, sumY: 0 });
+          }
+          const cell = densityMap.get(key)!;
+          cell.count++;
+          cell.sumX += blob.x;
+          cell.sumY += blob.y;
+        }
+
+        // Find top N densest cells as gravity centers
+        const candidates = Array.from(densityMap.values())
+          .filter(cell => cell.count >= GRAVITY_CENTER_MIN_BLOBS)
+          .sort((a, b) => b.count - a.count)
+          .slice(0, MAX_GRAVITY_CENTERS);
+
+        // Convert to gravity centers with averaged position
+        gravityCentersRef.current = candidates.map(cell => ({
+          x: cell.sumX / cell.count,
+          y: cell.sumY / cell.count,
+          strength: GRAVITY_CENTER_STRENGTH * Math.min(1, cell.count / 20), // Strength scales with density
+        }));
+      }
 
       const centerX = viewport.width / 2;
       const centerY = viewport.height / 2;
 
       for (const blob of updatedBlobs) {
+        // Weak fixed center gravity (fallback to prevent total dispersion)
         const distFromCenter = Math.sqrt(blob.x * blob.x + blob.y * blob.y);
-        if (distFromCenter > 30) {
-          blob.x -= blob.x * centerGravityStrength * deltaMs;
-          blob.y -= blob.y * centerGravityStrength * deltaMs;
+        if (distFromCenter > 50) {
+          blob.x -= blob.x * FIXED_CENTER_GRAVITY * deltaMs;
+          blob.y -= blob.y * FIXED_CENTER_GRAVITY * deltaMs;
+        }
+
+        // Dynamic gravity centers - pull toward where blobs congregate
+        for (const center of gravityCentersRef.current) {
+          const dx = center.x - blob.x;
+          const dy = center.y - blob.y;
+          const dist = Math.sqrt(dx * dx + dy * dy);
+
+          // Only apply if within influence radius and not too close
+          if (dist > 20 && dist < GRAVITY_CENTER_RADIUS * 2) {
+            const pull = center.strength * deltaMs / Math.max(50, dist * 0.5);
+            blob.x += dx * pull;
+            blob.y += dy * pull;
+          }
         }
 
         // Viewport boundary containment - soft edges push blobs back
-        // Reduced margin lets blobs use more of the screen
-        const boundaryMargin = 100;  // Reduced from 200 - blobs can go closer to edges
-        const boundaryStrength = 0.00006 * (0.3 + driftFactor * 0.4); // Gentler push
+        const boundaryMargin = 80;  // Smaller margin for more screen use
+        const boundaryStrength = 0.00008 * (0.3 + driftFactor * 0.4);
         const viewportX = blob.x + centerX;
         const viewportY = blob.y + centerY;
 
