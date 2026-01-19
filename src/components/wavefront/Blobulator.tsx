@@ -979,6 +979,17 @@ export function Blobulator({ audio }: BlobulatorProps) {
             />
           ))}
         </g>
+
+        {/* Gravity center indicators - small white dots showing where blobs congregate */}
+        {gravityCentersRef.current.map((center, i) => (
+          <circle
+            key={`gravity-${i}`}
+            cx={centerX + center.x}
+            cy={centerY + center.y}
+            r={4}
+            fill="rgba(255, 255, 255, 0.8)"
+          />
+        ))}
       </svg>
     </div>
   );
