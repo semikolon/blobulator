@@ -15,7 +15,7 @@
  */
 
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { createRealtimeBpmAnalyzer, getBiquadFilter, type BpmAnalyzer } from 'realtime-bpm-analyzer';
+import { createRealtimeBpmAnalyzer, type BpmAnalyzer } from 'realtime-bpm-analyzer';
 import type { AudioFeatures } from './types';
 
 // Configuration constants
@@ -29,6 +29,9 @@ const ENERGY_HISTORY_SIZE = 10;      // Frames to average for energy comparison
 
 // BPM detection
 const DEFAULT_BPM = 120;             // Fallback BPM before detection stabilizes
+const BPM_INPUT_GAIN = 15;           // Amplify microphone signal for BPM detection (mic is weak)
+const BPM_SMOOTHING = 0.97;          // Very heavy smoothing - only 3% of new value per update
+const BPM_JUMP_THRESHOLD = 15;       // Ignore jumps larger than 15 BPM (tighter filter)
 
 interface AdaptiveState {
   amplitudeHistory: number[];
@@ -97,6 +100,7 @@ export function useAdaptiveAudio(): AdaptiveAudioResult {
   const audioContextRef = useRef<AudioContext | null>(null);
   const analyserRef = useRef<AnalyserNode | null>(null);
   const sourceRef = useRef<MediaStreamAudioSourceNode | null>(null);
+  const gainNodeRef = useRef<GainNode | null>(null);
   const bpmAnalyzerRef = useRef<BpmAnalyzer | null>(null);
   const animationRef = useRef<number | null>(null);
   const lastSampleTimeRef = useRef<number>(0);
@@ -173,41 +177,77 @@ export function useAdaptiveAudio(): AdaptiveAudioResult {
 
       // Set up BPM detection
       try {
-        // Create low-pass filter for BPM detection (isolates bass/kick)
-        const lowpassFilter = getBiquadFilter(audioContext);
-        source.connect(lowpassFilter);
-
         // Create BPM analyzer
         const bpmAnalyzer = await createRealtimeBpmAnalyzer(audioContext, {
           continuousAnalysis: true,
-          stabilizationTime: 5000, // 5 seconds to stabilize
+          stabilizationTime: 10000, // 10 seconds to stabilize (microphone needs more time)
         });
         bpmAnalyzerRef.current = bpmAnalyzer;
 
-        // Connect using .node property (AudioWorkletNode)
-        lowpassFilter.connect(bpmAnalyzer.node);
+        // Create a gain node to amplify microphone signal for BPM detection
+        // Microphone input is much weaker than direct audio sources, so the BPM
+        // algorithm needs boosted signal to detect amplitude peaks
+        const gainNode = audioContext.createGain();
+        gainNode.gain.value = BPM_INPUT_GAIN;
+        gainNodeRef.current = gainNode;
+
+        // Connect: source → gainNode → bpmAnalyzer
+        // (The gain boost helps the peak detection algorithm find beats)
+        source.connect(gainNode);
+        gainNode.connect(bpmAnalyzer.node);
+        console.log(`BPM analyzer initialized with ${BPM_INPUT_GAIN}x gain boost for microphone input`);
 
         // Listen for BPM events using event emitter API
+        // Apply smoothing to avoid flickering between values
         bpmAnalyzer.on('bpm', (data) => {
           if (data.bpm && data.bpm.length > 0) {
             const topResult = data.bpm[0];
-            setAdaptiveState(prev => ({
-              ...prev,
-              bpm: Math.round(topResult.tempo),
-              bpmConfidence: Math.min(1, topResult.count / 100), // Normalize count to 0-1
-            }));
+            const newBpm = topResult.tempo;
+
+            setAdaptiveState(prev => {
+              // Check for large jumps (likely octave errors like 60 vs 120)
+              const bpmDiff = Math.abs(newBpm - prev.bpm);
+              if (bpmDiff > BPM_JUMP_THRESHOLD && prev.bpmConfidence > 0.3) {
+                // Ignore wild jumps when we already have some confidence
+                return prev;
+              }
+
+              // Apply exponential smoothing
+              const smoothedBpm = prev.bpm * BPM_SMOOTHING + newBpm * (1 - BPM_SMOOTHING);
+
+              return {
+                ...prev,
+                bpm: Math.round(smoothedBpm),
+                bpmConfidence: Math.min(1, topResult.count / 100),
+              };
+            });
           }
         });
 
         bpmAnalyzer.on('bpmStable', (data) => {
+          console.log('BPM stable:', data.bpm?.[0]?.tempo);
           if (data.bpm && data.bpm.length > 0) {
             const topResult = data.bpm[0];
-            setAdaptiveState(prev => ({
-              ...prev,
-              bpm: Math.round(topResult.tempo),
-              bpmConfidence: 1, // Stable = full confidence
-            }));
+            // Stable events - still use smoothing to avoid jumps
+            setAdaptiveState(prev => {
+              const bpmDiff = Math.abs(topResult.tempo - prev.bpm);
+              // Ignore even stable events if they're too different
+              if (bpmDiff > BPM_JUMP_THRESHOLD * 2) {
+                return { ...prev, bpmConfidence: 1 };
+              }
+              const smoothedBpm = prev.bpm * 0.8 + topResult.tempo * 0.2;
+              return {
+                ...prev,
+                bpm: Math.round(smoothedBpm),
+                bpmConfidence: 1,
+              };
+            });
           }
+        });
+
+        // Also listen for errors that might indicate why it's not working
+        bpmAnalyzer.on('error', (error) => {
+          console.error('BPM analyzer error:', error);
         });
       } catch (bpmError) {
         console.warn('BPM detection not available:', bpmError);
@@ -229,6 +269,9 @@ export function useAdaptiveAudio(): AdaptiveAudioResult {
     }
     if (bpmAnalyzerRef.current) {
       bpmAnalyzerRef.current.stop();
+    }
+    if (gainNodeRef.current) {
+      gainNodeRef.current.disconnect();
     }
     if (sourceRef.current) {
       sourceRef.current.disconnect();
@@ -317,6 +360,19 @@ export function useAdaptiveAudio(): AdaptiveAudioResult {
             newThreshold = Math.max(0.02, Math.min(0.5, newThreshold));
           }
 
+          // Decay BPM confidence when audio is quiet (no music playing)
+          // This allows BPM to reset when music stops
+          let newBpm = prev.bpm;
+          let newBpmConfidence = prev.bpmConfidence;
+          if (newFeatures.amplitude < 0.02) {
+            // Very quiet - decay confidence
+            newBpmConfidence = Math.max(0, prev.bpmConfidence - 0.02);
+            if (newBpmConfidence === 0) {
+              // Confidence gone - gradually return to default BPM
+              newBpm = prev.bpm * 0.95 + DEFAULT_BPM * 0.05;
+            }
+          }
+
           return {
             ...prev,
             amplitudeHistory: newAmplitudeHistory,
@@ -324,6 +380,8 @@ export function useAdaptiveAudio(): AdaptiveAudioResult {
             adaptiveThreshold: newThreshold,
             smoothedIntensity: newSmoothedIntensity,
             stats: newStats,
+            bpm: Math.round(newBpm),
+            bpmConfidence: newBpmConfidence,
           };
         });
       }
