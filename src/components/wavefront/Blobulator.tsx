@@ -65,9 +65,9 @@ const SEED_DECAY_FACTOR = 0.4;        // Each second: spawn 40% of previous (50â
 const SEED_DURATION_SECONDS = 5;       // Seeding phase lasts 5 seconds
 const SPAWN_RATE_CALM = 0.5;          // Blobs/second when intensity < 70%
 const SPAWN_RATE_INTENSE = 3;         // Blobs/second when intensity > 70%
-const DEATH_RATE_CALM = 1.5;          // Blobs/second dying when intensity < 70%
-const DEATH_RATE_INTENSE = 0.5;       // Blobs/second dying when intensity > 70%
-const INTENSITY_THRESHOLD = 0.7;      // Below this: more die than spawn
+const DEATH_RATE_CALM = 0.3;          // Blobs/second dying when intensity < 70% (gentle decline)
+const DEATH_RATE_INTENSE = 0.2;       // Blobs/second dying when intensity > 70% (barely any)
+const INTENSITY_THRESHOLD = 0.7;      // Below this: slightly more die than spawn
 
 // Note: Cluster pulsing constants removed (feature disabled)
 // Can be re-added from git history if needed
