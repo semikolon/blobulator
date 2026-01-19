@@ -57,10 +57,10 @@ Self-calibrating audio interpretation with BPM detection.
 5. Exponential smoothing for stable output
 
 **BPM detection** via `realtime-bpm-analyzer`:
-- Low-pass filter isolates bass frequencies
+- **15x gain boost** for microphone input (mic signal too weak without amplification)
 - Emits 'bpm' events during analysis
 - Emits 'bpmStable' when confident
-- ~5 seconds to stabilize
+- ~10 seconds to stabilize for microphone input
 
 **Display:** Stats panel shows intensity %, BPM, confidence, and threshold.
 
@@ -308,19 +308,27 @@ Each cluster pulses every 3-6s: grow to 1.5x OR shrink to 0.75x over 1s (easeInO
 
 **Library**: `realtime-bpm-analyzer` (zero dependencies, TypeScript)
 
+**Critical Fix**: Microphone input requires **gain amplification** - the signal is too weak for the BPM algorithm's peak detection without boosting. Low-pass filter (designed for direct audio sources) actually cuts too much signal from microphone input.
+
 **Setup**:
 ```typescript
-const lowpassFilter = getBiquadFilter(audioContext);
-source.connect(lowpassFilter);
-
 const bpmAnalyzer = await createRealtimeBpmAnalyzer(audioContext, {
   continuousAnalysis: true,
-  stabilizationTime: 5000,
+  stabilizationTime: 10000, // 10s for microphone (weaker signal)
 });
-lowpassFilter.connect(bpmAnalyzer.node);
+
+// Gain boost for microphone input (15x amplification)
+const gainNode = audioContext.createGain();
+gainNode.gain.value = 15;
+
+// Connect: source → gain → BPM analyzer
+source.connect(gainNode);
+gainNode.connect(bpmAnalyzer.node);
 
 bpmAnalyzer.on('bpm', (data) => { /* update BPM state */ });
 bpmAnalyzer.on('bpmStable', (data) => { /* confident detection */ });
 ```
+
+**Why gain boost works**: The BPM algorithm scans amplitude thresholds from 0.95 down to 0.20 looking for peaks. Microphone input (captured via room speakers) is much weaker than direct audio sources, so peaks don't reach detection thresholds. The 15x gain boost amplifies the signal enough for peak detection while not clipping (since we're not outputting to speakers).
 
 **Hybrid approach**: Energy-based intensity for immediate response + BPM for display/future tempo sync.
