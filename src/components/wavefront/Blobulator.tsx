@@ -48,16 +48,19 @@ const CLUSTER_FREQUENCY_BIAS = [
   { bassWeight: 0.4, midsWeight: 0.6, trebleWeight: 2.0 },  // Cluster 2: Heavy treble (oranges/yellows)
 ];
 
-// Hue anchors for frequency bands - WIDER SPREAD for more visible color shifts
-const HUE_BASS = 260;       // Deep purple (shifted cooler)
-const HUE_MIDS = 320;       // Neon pink (shifted warmer)
-const HUE_TREBLE = 35;      // Orange (shifted warmer, wraps around 0°)
-const HUE_BRIGHT = 55;      // Yellow for "all high" state
+// Hue anchors for frequency bands - COOLER BASE for deeper purple at rest
+const HUE_BASS = 265;       // Deep purple (cool anchor)
+const HUE_MIDS = 310;       // Purple-pink (not too warm)
+const HUE_TREBLE = 30;      // Coral-orange (warmest, requires treble to reach)
+const HUE_BRIGHT = 50;      // Yellow for "all high" state (hard to reach)
 
 // BPM normalization - maps BPM to 0-1 scale for smooth animation blending
 // Low BPM (60-90) = calm/cool, High BPM (140-180) = energetic/warm
 const BPM_MIN = 70;   // Below this = fully calm (0)
 const BPM_MAX = 150;  // Above this = fully energetic (1)
+
+// "Energy" metric = BPM + inertia combined (used for cluster-specific effects)
+// This creates sustained energy that doesn't flicker with every beat
 
 // Spawning lifecycle configuration
 // Phase 1: Seed the stage with diminishing spawns
@@ -228,6 +231,11 @@ export function Blobulator() {
   // BPM normalized to 0-1 scale (changes slowly, good for color/style blending)
   // Low BPM (70) = 0 (calm), High BPM (150) = 1 (energetic)
   const bpmNormalized = Math.max(0, Math.min(1, (bpm - BPM_MIN) / (BPM_MAX - BPM_MIN)));
+
+  // "Energy" metric: combines BPM (tempo) + inertia (sustained loudness)
+  // Used for cluster-specific dynamic effects (speed/size boosts)
+  // Weighted: 40% BPM + 60% inertia (inertia more important for "feel")
+  const energyMetric = Math.min(1, bpmNormalized * 0.4 + inertiaIntensity * 0.6);
 
   // Create a new blob at random position across the viewport
   // Uses padding to keep blobs slightly away from edges
@@ -431,11 +439,14 @@ export function Blobulator() {
         // Velocity updates - curl noise + generation-based acceleration
         // Uses dynamicConfig with audio-driven curl parameters
         // Speed scales dramatically with intensity AND mids
+        // Cluster 0 (tiny/fast) gets EXTRA speed boost from energy metric
+        const clusterIndex = getClusterIndex(blob.id);
+        const energySpeedBoost = clusterIndex === 0 ? (1 + energyMetric * 1.5) : 1; // Up to 2.5x for cluster 0
         updateBlobVelocity(
           blob,
           dynamicConfig,
           elapsedRef.current,
-          0.8 * cluster.speedMultiplier * midSpeedBoost * intensitySpeedBoost * expansionFactor
+          0.8 * cluster.speedMultiplier * midSpeedBoost * intensitySpeedBoost * energySpeedBoost * expansionFactor
         );
 
         // === COMBINE BOTH SYSTEMS ===
@@ -607,7 +618,7 @@ export function Blobulator() {
     });
 
     animationRef.current = requestAnimationFrame(animate);
-  }, [config, features, viewport, intensity, isPaused, createRandomBlob]);
+  }, [config, features, viewport, intensity, isPaused, createRandomBlob, energyMetric]);
 
   // Start/stop animation
   useEffect(() => {
@@ -626,7 +637,9 @@ export function Blobulator() {
     const cluster = CLUSTERS[clusterIndex];
 
     // Base size with cluster multiplier
-    const baseSize = blob.size * cluster.sizeMultiplier;
+    // Cluster 2 (large/slow) gets EXTRA size boost from energy metric
+    const energySizeBoost = clusterIndex === 2 ? (1 + energyMetric * 0.8) : 1; // Up to 1.8x for cluster 2
+    const baseSize = blob.size * cluster.sizeMultiplier * energySizeBoost;
 
     // Per-blob variation using index for uniqueness (±15%)
     const blobVariation = 1 + Math.sin(index * 1.7) * 0.15;
@@ -716,8 +729,9 @@ export function Blobulator() {
     if (frequencyHue < 0) frequencyHue += 360;
 
     // Intensity influence (25% of color) - pushes toward warmer hues
-    // Higher intensity = shift toward pink/orange (add ~40° at max intensity)
-    const intensityHueShift = intensity * 40;
+    // RAISED BAR: Only shifts significantly at high intensity (squared for higher threshold)
+    // Max ~30° hue shift, but requires high intensity to get there
+    const intensityHueShift = Math.pow(intensity, 1.5) * 30;
 
     // Combine: 75% frequency + 25% intensity
     let baseHue = frequencyHue * 0.75 + (frequencyHue + intensityHueShift) * 0.25;
@@ -737,16 +751,17 @@ export function Blobulator() {
       : brightFactor * 15;  // Subtle warm shift for other clusters
     baseHue = ((baseHue + brightShift) % 360 + 360) % 360;
 
-    // SATURATION: More dramatic range
-    // Base 55% when quiet, up to 100% with bass + intensity
-    const baseSaturation = 55 + features.bass * 25 + intensity * 25;
+    // SATURATION: Rich and deep
+    // Base 60% when quiet, needs high bass/intensity to go neon
+    const baseSaturation = 60 + features.bass * 20 + Math.pow(intensity, 1.3) * 20;
 
-    // LIGHTNESS: More dramatic flash on loud moments
-    // Base 45% (slightly darker), goes up to 75% with intensity + treble
-    // "All high" pushes cluster 2 toward bright white (up to 90%)
-    const baseLightness = 45 + features.treble * 15 + intensity * 20;
-    const brightLightnessBoost = clusterIndex === 2 ? brightFactor * 30 : brightFactor * 15;
-    const lightness = Math.min(90, baseLightness + brightLightnessBoost);
+    // LIGHTNESS: Darker base, raised bar for brightness
+    // Base 38% (darker purple), requires high treble+intensity to brighten
+    // Uses power curve so low values stay dark, only high values go bright
+    const baseLightness = 38 + features.treble * 12 + Math.pow(intensity, 1.4) * 25;
+    // "All high" brightness boost requires even higher threshold
+    const brightLightnessBoost = clusterIndex === 2 ? Math.pow(brightFactor, 1.2) * 30 : Math.pow(brightFactor, 1.2) * 15;
+    const lightness = Math.min(88, baseLightness + brightLightnessBoost);
 
     return { h: baseHue, s: Math.min(100, baseSaturation), l: lightness };
   };
