@@ -8,6 +8,17 @@ Audio-reactive metaball visualization engine with wavefront expansion animation,
 
 **Working visualization** with unified intensity-based animation, BPM detection, and 6 enhancement phases complete.
 
+### v3 - Population & Physics Polish (January 19, 2026)
+
+Smooth dynamics and dual-mode architecture:
+
+1. **Soft Population Cap** - Death rate scales exponentially as population approaches 350, eliminating jarring instant culls (was: hard cap 300→250 caused visible "mass extinction")
+2. **Dynamic Gravity Centers** - Blobs congregate around detected density clusters; centers lerp smoothly toward targets (0.03/frame) to prevent jerky rearrangement
+3. **Voidulator Mode** - App.tsx lifted audio to shared hook; ModeSwitcher toggles between Blobulator and Voidulator visualizations
+4. **Energy Metric** - `bpmNormalized * 0.4 + inertiaIntensity * 0.6` drives cluster-specific effects (Cluster 0 speed boost, Cluster 2 size boost)
+
+**Debug feature**: White dots with dark stroke show gravity center positions (up to 3).
+
 ### v2 - Intensity-Based System (January 18, 2026)
 
 Major upgrade implementing all 6 user-requested enhancements:
@@ -144,14 +155,22 @@ See mapping table above. Key principle: "don't go overboard" - subtle, low-hangi
 ## Current Code Structure (blobulator)
 
 ```
-src/components/wavefront/
-├── types.ts            # WaveFrontBlob, BlobFieldConfig, DRIFT_CONFIG
-├── physics.ts          # Velocity, spawning, position updates
-├── flowField.ts        # Curl noise implementation
-├── drift.ts            # Ambient swirling mode
-├── useAdaptiveAudio.ts # Self-calibrating audio with adaptive threshold
-├── Blobulator.tsx      # Main React component
-└── index.ts            # Module exports
+src/
+├── App.tsx                    # Mode switching, shared audio provider
+├── shared/
+│   ├── useAdaptiveAudio.ts   # Lifted audio hook (shared between modes)
+│   ├── types.ts              # VisualizationMode, AdaptiveAudioResult
+│   └── index.ts
+├── components/
+│   ├── ModeSwitcher.tsx      # Blobulator/Voidulator toggle UI
+│   ├── wavefront/
+│   │   ├── Blobulator.tsx    # Main blob visualization
+│   │   ├── types.ts          # WaveFrontBlob, BlobFieldConfig
+│   │   ├── physics.ts        # Velocity, spawning, curl noise
+│   │   ├── drift.ts          # Ambient swirling mode
+│   │   └── flowField.ts      # Curl noise implementation
+│   └── voidulator/
+│       └── Voidulator.tsx    # Laser reflection visualization
 ```
 
 ## Repository
@@ -332,3 +351,35 @@ bpmAnalyzer.on('bpmStable', (data) => { /* confident detection */ });
 **Why gain boost works**: The BPM algorithm scans amplitude thresholds from 0.95 down to 0.20 looking for peaks. Microphone input (captured via room speakers) is much weaker than direct audio sources, so peaks don't reach detection thresholds. The 15x gain boost amplifies the signal enough for peak detection while not clipping (since we're not outputting to speakers).
 
 **Hybrid approach**: Energy-based intensity for immediate response + BPM for display/future tempo sync.
+
+---
+
+## Performance Optimization (January 19, 2026)
+
+### Identified Issue: O(n²) Neighbor Calculations
+
+Three loops iterate ALL blobs against ALL blobs every frame:
+1. **Direction influence** (Blobulator.tsx ~620) - aligns velocities with neighbors
+2. **Size influence** (`getDisplaySize`) - larger neighbors increase size
+3. **Color blending** (`getDynamicColor`) - nearby blobs blend colors
+
+**Impact**: At 350 blobs = 350² × 3 = **367,500 distance calculations per frame**.
+
+### Solution: Spatial Hashing (In Progress)
+
+Divide viewport into 100px grid cells. Only check blobs in same + adjacent cells (9 cells max).
+
+```typescript
+class SpatialHash {
+  rebuild(blobs)           // O(n) - assign each blob to its cell
+  getNeighborIndices(x, y) // O(1) - return indices from 9 nearby cells
+}
+```
+
+**Expected improvement**: 122,500 checks → ~2,000 checks per loop (50-60x reduction).
+
+### Other Performance Notes
+
+- **SVG `feGaussianBlur`**: CPU-heavy in Safari; Firefox 132+ has WebRender GPU acceleration
+- **Frame-skipping**: Could run neighbor influence every 2-3 frames (imperceptible at 60fps)
+- **React optimization**: Already using refs for animation state (avoids re-render overhead)

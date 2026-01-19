@@ -93,6 +93,62 @@ const GRAVITY_CENTER_UPDATE_MS = 500; // How often to recalculate target centers
 const GRAVITY_CENTER_LERP = 0.03;     // Smoothing factor: 0.03 = ~1s to reach target (smooth)
 const FIXED_CENTER_GRAVITY = 0.000001; // Much weaker fixed center (was 0.000008)
 
+// Spatial hash configuration for O(n) neighbor lookups instead of O(n²)
+const SPATIAL_HASH_CELL_SIZE = 100;   // Must be >= BLOB_INFLUENCE_RADIUS (80px)
+
+/**
+ * Spatial Hash Grid - enables O(n) neighbor lookups instead of O(n²)
+ * Divides space into cells; only checks adjacent cells for neighbors.
+ * With 350 blobs and 80px influence radius, reduces checks from 122,500 to ~2,000.
+ */
+class SpatialHash {
+  private cellSize: number;
+  private cells: Map<string, number[]>; // cell key -> array of blob indices
+
+  constructor(cellSize: number) {
+    this.cellSize = cellSize;
+    this.cells = new Map();
+  }
+
+  // Convert position to cell key
+  private getKey(x: number, y: number): string {
+    const cellX = Math.floor(x / this.cellSize);
+    const cellY = Math.floor(y / this.cellSize);
+    return `${cellX},${cellY}`;
+  }
+
+  // Clear and rebuild from blob array
+  rebuild(blobs: WaveFrontBlob[]): void {
+    this.cells.clear();
+    for (let i = 0; i < blobs.length; i++) {
+      const key = this.getKey(blobs[i].x, blobs[i].y);
+      if (!this.cells.has(key)) {
+        this.cells.set(key, []);
+      }
+      this.cells.get(key)!.push(i);
+    }
+  }
+
+  // Get indices of blobs in same + adjacent cells (9 cells total)
+  getNeighborIndices(x: number, y: number): number[] {
+    const cellX = Math.floor(x / this.cellSize);
+    const cellY = Math.floor(y / this.cellSize);
+    const result: number[] = [];
+
+    // Check 3x3 grid of cells centered on this position
+    for (let dx = -1; dx <= 1; dx++) {
+      for (let dy = -1; dy <= 1; dy++) {
+        const key = `${cellX + dx},${cellY + dy}`;
+        const cell = this.cells.get(key);
+        if (cell) {
+          result.push(...cell);
+        }
+      }
+    }
+    return result;
+  }
+}
+
 // Get cluster index from blob ID (uses random part for even distribution)
 function getClusterIndex(blobId: string): number {
   const randomPart = blobId.split('-')[1] || blobId;
@@ -980,14 +1036,16 @@ export function Blobulator({ audio }: BlobulatorProps) {
           ))}
         </g>
 
-        {/* Gravity center indicators - small white dots showing where blobs congregate */}
+        {/* Gravity center indicators - dots showing where blobs congregate */}
         {gravityCentersRef.current.map((center, i) => (
           <circle
             key={`gravity-${i}`}
             cx={centerX + center.x}
             cy={centerY + center.y}
-            r={4}
-            fill="rgba(255, 255, 255, 0.8)"
+            r={6}
+            fill="white"
+            stroke="rgba(0, 0, 0, 0.6)"
+            strokeWidth={2}
           />
         ))}
       </svg>
