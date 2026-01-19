@@ -27,6 +27,10 @@ const MAX_SAMPLES = HISTORY_DURATION_MS / SAMPLE_INTERVAL_MS; // 600 samples
 const INTENSITY_SMOOTHING = 0.15;    // How fast intensity responds (0=instant, 1=never)
 const ENERGY_HISTORY_SIZE = 10;      // Frames to average for energy comparison
 
+// Inertia intensity - 2-second rolling average for stable visual mapping
+const INERTIA_WINDOW_MS = 2000;      // 2 seconds of history
+const INERTIA_SAMPLES = INERTIA_WINDOW_MS / SAMPLE_INTERVAL_MS; // 20 samples
+
 // BPM detection
 const DEFAULT_BPM = 120;             // Fallback BPM before detection stabilizes
 const BPM_INPUT_GAIN = 15;           // Amplify microphone signal for BPM detection (mic is weak)
@@ -37,8 +41,10 @@ const BPM_UPDATE_INTERVAL_MS = 1000; // Max 1 BPM display update per second (pre
 interface AdaptiveState {
   amplitudeHistory: number[];
   energyHistory: number[];           // Recent energy values for derivative calculation
+  inertiaHistory: number[];          // Last 2s of intensity for rolling average
   adaptiveThreshold: number;
   smoothedIntensity: number;         // Smoothed 0-1 intensity value
+  inertiaIntensity: number;          // 2-second rolling average intensity
   bpm: number;                       // Current detected BPM
   bpmConfidence: number;             // How confident we are in the BPM (0-1)
   stats: {
@@ -56,6 +62,8 @@ interface AdaptiveAudioResult {
   normalizedFeatures: AudioFeatures;
   // Continuous intensity (0-1) - replaces binary mode
   intensity: number;
+  // Inertia intensity (2-second rolling average) - stable for visual mapping
+  inertiaIntensity: number;
   // BPM detection
   bpm: number;
   bpmConfidence: number;
@@ -85,8 +93,10 @@ export function useAdaptiveAudio(): AdaptiveAudioResult {
   const [adaptiveState, setAdaptiveState] = useState<AdaptiveState>({
     amplitudeHistory: [],
     energyHistory: [],
+    inertiaHistory: [],
     adaptiveThreshold: 0.05,
     smoothedIntensity: 0,
+    inertiaIntensity: 0,
     bpm: DEFAULT_BPM,
     bpmConfidence: 0,
     stats: {
@@ -362,6 +372,15 @@ export function useAdaptiveAudio(): AdaptiveAudioResult {
           const newSmoothedIntensity = prev.smoothedIntensity * INTENSITY_SMOOTHING +
             rawIntensity * (1 - INTENSITY_SMOOTHING);
 
+          // Calculate inertia intensity (2-second rolling average for stable visual mapping)
+          const newInertiaHistory = [...prev.inertiaHistory, newSmoothedIntensity];
+          if (newInertiaHistory.length > INERTIA_SAMPLES) {
+            newInertiaHistory.shift();
+          }
+          const newInertiaIntensity = newInertiaHistory.length > 0
+            ? newInertiaHistory.reduce((a, b) => a + b, 0) / newInertiaHistory.length
+            : 0;
+
           // Update adaptive threshold based on smoothed intensity
           // This helps maintain the visual character across different music styles
           let newThreshold = prev.adaptiveThreshold;
@@ -388,8 +407,10 @@ export function useAdaptiveAudio(): AdaptiveAudioResult {
             ...prev,
             amplitudeHistory: newAmplitudeHistory,
             energyHistory: newEnergyHistory,
+            inertiaHistory: newInertiaHistory,
             adaptiveThreshold: newThreshold,
             smoothedIntensity: newSmoothedIntensity,
+            inertiaIntensity: newInertiaIntensity,
             stats: newStats,
             bpm: Math.round(newBpm),
             bpmConfidence: newBpmConfidence,
@@ -421,6 +442,7 @@ export function useAdaptiveAudio(): AdaptiveAudioResult {
     features,
     normalizedFeatures,
     intensity: adaptiveState.smoothedIntensity,
+    inertiaIntensity: adaptiveState.inertiaIntensity,
     bpm: adaptiveState.bpm,
     bpmConfidence: adaptiveState.bpmConfidence,
     adaptiveThreshold: adaptiveState.adaptiveThreshold,

@@ -192,6 +192,7 @@ export function Blobulator() {
     error,
     features,
     intensity,
+    inertiaIntensity,
     bpm,
     bpmConfidence,
     adaptiveThreshold,
@@ -714,11 +715,12 @@ export function Blobulator() {
   const centerX = viewport.width / 2;
   const centerY = viewport.height / 2;
 
-  // Dynamic background color based on BPM
+  // Dynamic background color based on BPM + inertia intensity
   // Interpolate between calm purple tint and energetic dark
-  const bgLightness = 10 + bpmNormalized * 4;  // 10% at low BPM, 14% at high BPM
-  const bgSaturation = 20 - bpmNormalized * 15; // 20% purple at low BPM, 5% at high BPM
-  const backgroundColor = `hsl(270, ${bgSaturation}%, ${bgLightness}%)`;
+  // Inertia intensity adds sustained energy glow (saturation boost)
+  const bgLightness = 10 + bpmNormalized * 4 + inertiaIntensity * 3;  // Up to 17% with sustained energy
+  const bgSaturation = 20 - bpmNormalized * 10 + inertiaIntensity * 15; // Inertia adds up to 15% saturation
+  const backgroundColor = `hsl(270, ${Math.min(35, bgSaturation)}%, ${Math.min(18, bgLightness)}%)`;
 
   return (
     <div style={{ ...styles.container, backgroundColor }} onClick={handleBackgroundClick}>
@@ -772,7 +774,7 @@ export function Blobulator() {
               BPM: {bpm} {bpmConfidence > 0.5 ? '✓' : '~'} | Style: {(bpmNormalized * 100).toFixed(0)}%
             </p>
             <p style={{ ...styles.stats, fontSize: 10, marginTop: 2 }}>
-              Intensity: {(intensity * 100).toFixed(0)}% | Thresh: {adaptiveThreshold.toFixed(3)}
+              Intensity: {(intensity * 100).toFixed(0)}% | Inertia: {(inertiaIntensity * 100).toFixed(0)}%
             </p>
           </>
         )}
