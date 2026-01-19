@@ -41,17 +41,18 @@ const INFLUENCE_MIN_AGE = 3000;        // ms - start influencing after this age
 // Frequency-based color mapping (75% frequency mix + 25% intensity)
 // Bass = dark purple (270°), Mids = purple→neon pink (290-320°), Treble = pink→coral→orange (320-30°)
 // Each cluster has a different frequency "character" for visual variety
+// More extreme frequency bias for visible color variety between clusters
 const CLUSTER_FREQUENCY_BIAS = [
-  { bassWeight: 1.2, midsWeight: 1.0, trebleWeight: 0.8 },  // Cluster 0: Bass-leaning (darker purples)
-  { bassWeight: 0.9, midsWeight: 1.3, trebleWeight: 0.9 },  // Cluster 1: Mids-leaning (more pinks)
-  { bassWeight: 0.7, midsWeight: 0.9, trebleWeight: 1.4 },  // Cluster 2: Treble-leaning (oranges, can go yellow)
+  { bassWeight: 1.8, midsWeight: 0.8, trebleWeight: 0.4 },  // Cluster 0: Heavy bass (deep purples)
+  { bassWeight: 0.6, midsWeight: 1.8, trebleWeight: 0.6 },  // Cluster 1: Heavy mids (neon pinks)
+  { bassWeight: 0.4, midsWeight: 0.6, trebleWeight: 2.0 },  // Cluster 2: Heavy treble (oranges/yellows)
 ];
 
-// Hue anchors for frequency bands
-const HUE_BASS = 270;       // Dark purple
-const HUE_MIDS = 310;       // Purple-pink
-const HUE_TREBLE = 25;      // Coral-orange (wraps around 0°)
-const HUE_BRIGHT = 50;      // Yellow-ish for "all high" state
+// Hue anchors for frequency bands - WIDER SPREAD for more visible color shifts
+const HUE_BASS = 260;       // Deep purple (shifted cooler)
+const HUE_MIDS = 320;       // Neon pink (shifted warmer)
+const HUE_TREBLE = 35;      // Orange (shifted warmer, wraps around 0°)
+const HUE_BRIGHT = 55;      // Yellow for "all high" state
 
 // BPM normalization - maps BPM to 0-1 scale for smooth animation blending
 // Low BPM (60-90) = calm/cool, High BPM (140-180) = energetic/warm
@@ -343,15 +344,18 @@ export function Blobulator() {
       const baseSpawnRate = isIntense ? SPAWN_RATE_INTENSE : SPAWN_RATE_CALM;
       const baseDeathRate = isIntense ? DEATH_RATE_INTENSE : DEATH_RATE_CALM;
 
-      // BPM boost: higher BPM = faster spawn (up to 80% boost at max BPM)
-      const bpmSpawnBoost = 1 + bpmNormalized * 0.8;
-      // BPM also slightly reduces death rate at high tempos (keeps population up)
-      const bpmDeathReduction = 1 - bpmNormalized * 0.3;
+      // BPM boost: higher BPM = faster spawn (up to 100% boost at max BPM)
+      const bpmSpawnBoost = 1 + bpmNormalized * 1.0;
+      // BPM also reduces death rate at high tempos (keeps population up)
+      const bpmDeathReduction = 1 - bpmNormalized * 0.4;
 
-      // Bass boost: strong bass doubles spawn rate
-      const bassBoost = features.bass > 0.5 ? 2 : 1;
+      // Continuous bass boost: scales smoothly with bass level (up to 2.5x at max bass)
+      const bassBoost = 1 + features.bass * 1.5;
 
-      const effectiveSpawnRate = baseSpawnRate * bassBoost * bpmSpawnBoost;
+      // Intensity also boosts spawn (up to 50% extra)
+      const intensitySpawnBoost = 1 + intensity * 0.5;
+
+      const effectiveSpawnRate = baseSpawnRate * bassBoost * bpmSpawnBoost * intensitySpawnBoost;
       const effectiveDeathRate = baseDeathRate * bpmDeathReduction;
 
       // Check if it's time to spawn
@@ -383,10 +387,11 @@ export function Blobulator() {
       // No thresholds, no mode switches - just continuous scaling
 
       // Blend factors based on INTENSITY (responsive to music energy)
-      // Intensity changes with the music = visible difference in animation style
-      const driftFactor = 1 - intensity * 0.8;           // 1.0 → 0.2 (mostly drift when quiet)
-      const expansionFactor = 0.05 + intensity * 0.95;   // 0.05 → 1.0 (mostly expansion when loud)
-      const midSpeedBoost = 1 + features.mid * 0.5;
+      // More aggressive scaling for visible animation differences
+      const driftFactor = 1 - intensity * 0.9;           // 1.0 → 0.1 (almost no drift when loud)
+      const expansionFactor = 0.1 + intensity * 1.5;     // 0.1 → 1.6 (MUCH faster when loud)
+      const midSpeedBoost = 1 + features.mid * 1.0;      // Doubled mids speed boost (100% max)
+      const intensitySpeedBoost = 1 + intensity * 0.8;   // Extra speed from overall intensity
 
       // === AUDIO-DRIVEN CURL NOISE PARAMETERS ===
       // These control the low-level "feel" of blob movement
@@ -425,11 +430,12 @@ export function Blobulator() {
 
         // Velocity updates - curl noise + generation-based acceleration
         // Uses dynamicConfig with audio-driven curl parameters
+        // Speed scales dramatically with intensity AND mids
         updateBlobVelocity(
           blob,
           dynamicConfig,
           elapsedRef.current,
-          0.8 * cluster.speedMultiplier * midSpeedBoost * expansionFactor
+          0.8 * cluster.speedMultiplier * midSpeedBoost * intensitySpeedBoost * expansionFactor
         );
 
         // === COMBINE BOTH SYSTEMS ===
@@ -625,11 +631,14 @@ export function Blobulator() {
     // Per-blob variation using index for uniqueness (±15%)
     const blobVariation = 1 + Math.sin(index * 1.7) * 0.15;
 
-    // Amplitude affects all blobs (pulse effect)
-    const amplitudeBoost = 1 + features.amplitude * 0.4;
+    // BASS THUMP: Strong size pulse on bass hits (80% boost at max)
+    const bassThump = 1 + features.bass * 0.8;
 
-    // Mids create subtle per-blob wobble (different phase per blob)
-    const midWobble = 1 + features.mid * 0.2 * Math.sin(elapsedRef.current * 0.003 + index * 0.5);
+    // Amplitude affects all blobs (additional pulse, 50% boost)
+    const amplitudeBoost = 1 + features.amplitude * 0.5;
+
+    // Mids create per-blob wobble (different phase per blob, stronger)
+    const midWobble = 1 + features.mid * 0.35 * Math.sin(elapsedRef.current * 0.004 + index * 0.5);
 
     // Breathing effect - stronger at low BPM (calm state)
     const breathingAmount = (1 - bpmNormalized) * getSizeBreathingMultiplier(elapsedRef.current, index);
@@ -672,7 +681,7 @@ export function Blobulator() {
       }
     }
 
-    return baseSize * blobVariation * amplitudeBoost * midWobble * breathingMultiplier * clusterPulseMultiplier * neighborSizeInfluence;
+    return baseSize * blobVariation * bassThump * amplitudeBoost * midWobble * breathingMultiplier * clusterPulseMultiplier * neighborSizeInfluence;
   };
 
   // Calculate base HSL color for a blob (without neighbor blending)
@@ -728,14 +737,16 @@ export function Blobulator() {
       : brightFactor * 15;  // Subtle warm shift for other clusters
     baseHue = ((baseHue + brightShift) % 360 + 360) % 360;
 
-    // Saturation: high bass = richer, high intensity = more neon
-    const baseSaturation = 65 + features.bass * 15 + intensity * 20;
+    // SATURATION: More dramatic range
+    // Base 55% when quiet, up to 100% with bass + intensity
+    const baseSaturation = 55 + features.bass * 25 + intensity * 25;
 
-    // Lightness: base 50%, brighter with treble and intensity
-    // "All high" pushes toward white (up to 85% lightness for cluster 2)
-    const baseLightness = 50 + features.treble * 10 + intensity * 10;
-    const brightLightnessBoost = clusterIndex === 2 ? brightFactor * 20 : brightFactor * 10;
-    const lightness = Math.min(85, baseLightness + brightLightnessBoost);
+    // LIGHTNESS: More dramatic flash on loud moments
+    // Base 45% (slightly darker), goes up to 75% with intensity + treble
+    // "All high" pushes cluster 2 toward bright white (up to 90%)
+    const baseLightness = 45 + features.treble * 15 + intensity * 20;
+    const brightLightnessBoost = clusterIndex === 2 ? brightFactor * 30 : brightFactor * 15;
+    const lightness = Math.min(90, baseLightness + brightLightnessBoost);
 
     return { h: baseHue, s: Math.min(100, baseSaturation), l: lightness };
   };
