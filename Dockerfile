@@ -11,8 +11,9 @@ FROM node:${NODE_VERSION}-alpine AS builder
 WORKDIR /app
 
 # Install dependencies first (cache layer)
+# --legacy-peer-deps needed for gooey-react (React 16/17 peer dep vs React 19)
 COPY package.json package-lock.json ./
-RUN npm ci
+RUN npm ci --legacy-peer-deps
 
 # Build the app
 COPY . ./
