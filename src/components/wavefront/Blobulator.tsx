@@ -22,7 +22,11 @@ import {
   recycleBlobsAtEdge,
 } from './physics';
 import { getSizeBreathingMultiplier } from './drift';
-import { useAdaptiveAudio } from './useAdaptiveAudio';
+import type { AdaptiveAudioResult } from '../../shared';
+
+interface BlobulatorProps {
+  audio: AdaptiveAudioResult;
+}
 
 // 3 Cluster configurations - more dramatic size differences
 const CLUSTERS = [
@@ -69,10 +73,16 @@ const SEED_BLOBS_INITIAL = 50;        // First second: spawn 50 blobs
 const SEED_DECAY_FACTOR = 0.4;        // Each second: spawn 40% of previous (50→20→8→3...)
 const SEED_DURATION_SECONDS = 5;       // Seeding phase lasts 5 seconds
 const SPAWN_RATE_CALM = 0.5;          // Blobs/second when intensity < 70%
-const SPAWN_RATE_INTENSE = 3;         // Blobs/second when intensity > 70%
-const DEATH_RATE_CALM = 0.3;          // Blobs/second dying when intensity < 70% (gentle decline)
-const DEATH_RATE_INTENSE = 0.2;       // Blobs/second dying when intensity > 70% (barely any)
+const SPAWN_RATE_INTENSE = 2;         // Blobs/second when intensity > 70% (reduced from 3)
+const DEATH_RATE_CALM = 0.4;          // Blobs/second dying when intensity < 70%
+const DEATH_RATE_INTENSE = 0.3;       // Blobs/second dying when intensity > 70% (increased from 0.2)
 const INTENSITY_THRESHOLD = 0.7;      // Below this: slightly more die than spawn
+
+// Soft population cap - death rate scales up as we approach limit
+const SOFT_CAP_START = 200;           // Start increasing death rate here
+const SOFT_CAP_MAX = 350;             // Maximum comfortable population
+const HARD_CAP_LIMIT = 400;           // Emergency cull threshold
+const HARD_CAP_TARGET = 350;          // Cull down to this
 
 // Dynamic gravity centers - form where blobs congregate
 const MAX_GRAVITY_CENTERS = 3;        // Maximum active gravity wells
@@ -102,8 +112,8 @@ const styles = {
     top: 16,
     left: 16,
     zIndex: 20,
-    backgroundColor: 'rgba(39, 39, 42, 0.95)',
-    borderRadius: 12,
+    backgroundColor: 'rgba(39, 39, 42, 0.8)',
+    borderRadius: 16,
     padding: 16,
     color: 'white',
     fontFamily: 'system-ui, sans-serif',
@@ -189,7 +199,7 @@ function createBlob(baseBlobSize: number): WaveFrontBlob {
   };
 }
 
-export function Blobulator() {
+export function Blobulator({ audio }: BlobulatorProps) {
   // Initialize with 50 blobs immediately (no timing dependencies)
   const [blobs, setBlobs] = useState<WaveFrontBlob[]>(() =>
     Array.from({ length: SEED_BLOBS_INITIAL }, () => createBlob(DEFAULT_CONFIG.baseBlobSize))
@@ -197,6 +207,8 @@ export function Blobulator() {
   const [config] = useState<BlobFieldConfig>(DEFAULT_CONFIG);
   const [viewport, setViewport] = useState({ width: window.innerWidth, height: window.innerHeight });
   const [isPaused, setIsPaused] = useState(false);
+
+  // Extract audio values from shared audio prop
   const {
     isListening,
     error,
@@ -205,14 +217,14 @@ export function Blobulator() {
     inertiaIntensity,
     bpm,
     bpmConfidence,
-    adaptiveThreshold,
     startListening,
     stopListening,
-  } = useAdaptiveAudio();
+  } = audio;
 
   const animationRef = useRef<number | null>(null);
   const lastSpawnRef = useRef<number>(0);
   const lastDeathRef = useRef<number>(0);
+  const populationRef = useRef<number>(50); // Track current blob count for soft cap
   const elapsedRef = useRef<number>(0);
   const lastFrameRef = useRef<number>(0);
   const lastDisplayUpdateRef = useRef<number>(0);
@@ -352,19 +364,29 @@ export function Blobulator() {
       const baseSpawnRate = isIntense ? SPAWN_RATE_INTENSE : SPAWN_RATE_CALM;
       const baseDeathRate = isIntense ? DEATH_RATE_INTENSE : DEATH_RATE_CALM;
 
-      // BPM boost: higher BPM = faster spawn (up to 100% boost at max BPM)
-      const bpmSpawnBoost = 1 + bpmNormalized * 1.0;
-      // BPM also reduces death rate at high tempos (keeps population up)
-      const bpmDeathReduction = 1 - bpmNormalized * 0.4;
+      // BPM boost: higher BPM = faster spawn (up to 60% boost at max BPM)
+      const bpmSpawnBoost = 1 + bpmNormalized * 0.6;
+      // BPM slightly reduces death rate at high tempos
+      const bpmDeathReduction = 1 - bpmNormalized * 0.2;
 
-      // Continuous bass boost: scales smoothly with bass level (up to 2.5x at max bass)
-      const bassBoost = 1 + features.bass * 1.5;
+      // Continuous bass boost: scales smoothly with bass level (up to 1.5x at max bass)
+      const bassBoost = 1 + features.bass * 0.5;
 
-      // Intensity also boosts spawn (up to 50% extra)
-      const intensitySpawnBoost = 1 + intensity * 0.5;
+      // Intensity also boosts spawn (up to 30% extra)
+      const intensitySpawnBoost = 1 + intensity * 0.3;
+
+      // SOFT CAP: Death rate increases as population approaches limit
+      // This creates natural equilibrium instead of jarring hard culls
+      const currentPopulation = populationRef.current;
+      let populationDeathMultiplier = 1;
+      if (currentPopulation > SOFT_CAP_START) {
+        // Exponentially increase death rate as we approach SOFT_CAP_MAX
+        const overageRatio = Math.min(1, (currentPopulation - SOFT_CAP_START) / (SOFT_CAP_MAX - SOFT_CAP_START));
+        populationDeathMultiplier = 1 + Math.pow(overageRatio, 1.5) * 4; // Up to 5x death rate at cap
+      }
 
       const effectiveSpawnRate = baseSpawnRate * bassBoost * bpmSpawnBoost * intensitySpawnBoost;
-      const effectiveDeathRate = baseDeathRate * bpmDeathReduction;
+      const effectiveDeathRate = baseDeathRate * bpmDeathReduction * populationDeathMultiplier;
 
       // Check if it's time to spawn
       const spawnInterval = 1000 / effectiveSpawnRate;
@@ -607,12 +629,16 @@ export function Blobulator() {
         }
       }
 
-      // Limit total blob count for performance
-      if (updatedBlobs.length > 300) {
+      // Hard cap - emergency cull if soft cap fails to maintain equilibrium
+      // This should rarely trigger now that soft cap is in place
+      if (updatedBlobs.length > HARD_CAP_LIMIT) {
         updatedBlobs = updatedBlobs
           .sort((a, b) => a.age - b.age)
-          .slice(-250);
+          .slice(-HARD_CAP_TARGET);
       }
+
+      // Update population ref for soft cap calculation next frame
+      populationRef.current = updatedBlobs.length;
 
       return updatedBlobs;
     });
