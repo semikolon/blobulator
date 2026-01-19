@@ -417,6 +417,12 @@ export function Blobulator() {
       // Phase 2: Equilibrium - intensity-driven spawn/death balance
 
       const now = performance.now();
+
+      // Initialize seeding start time on first frame (fixes race condition with useEffect)
+      if (seedingStartTimeRef.current === 0) {
+        seedingStartTimeRef.current = now;
+      }
+
       const seedingElapsedMs = now - seedingStartTimeRef.current;
       const seedingElapsedSeconds = Math.floor(seedingElapsedMs / 1000);
       const isSeeding = seedingElapsedSeconds < SEED_DURATION_SECONDS;
