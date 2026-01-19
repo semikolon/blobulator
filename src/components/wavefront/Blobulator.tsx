@@ -38,19 +38,20 @@ const SIZE_INFLUENCE_STRENGTH = 0.15;  // 0-1 - how much neighbors affect size (
 const DIRECTION_INFLUENCE_STRENGTH = 0.08; // 0-1 - how much to align with neighbor velocities
 const INFLUENCE_MIN_AGE = 3000;        // ms - start influencing after this age
 
-// Cluster color palettes - shift based on intensity
-// Low intensity (calm): Cool colors (purple, blue, teal, turquoise)
-// High intensity (energetic): Warm colors (neon pink, magenta, orange)
-const CLUSTER_HUE_RANGES_COOL = [
-  { base: 270, spread: 30 },   // Cluster 0: Purple/violet
-  { base: 200, spread: 25 },   // Cluster 1: Teal/turquoise
-  { base: 230, spread: 25 },   // Cluster 2: Blue
+// Frequency-based color mapping (75% frequency mix + 25% intensity)
+// Bass = dark purple (270°), Mids = purple→neon pink (290-320°), Treble = pink→coral→orange (320-30°)
+// Each cluster has a different frequency "character" for visual variety
+const CLUSTER_FREQUENCY_BIAS = [
+  { bassWeight: 1.2, midsWeight: 1.0, trebleWeight: 0.8 },  // Cluster 0: Bass-leaning (darker purples)
+  { bassWeight: 0.9, midsWeight: 1.3, trebleWeight: 0.9 },  // Cluster 1: Mids-leaning (more pinks)
+  { bassWeight: 0.7, midsWeight: 0.9, trebleWeight: 1.4 },  // Cluster 2: Treble-leaning (oranges, can go yellow)
 ];
-const CLUSTER_HUE_RANGES_WARM = [
-  { base: 320, spread: 25 },   // Cluster 0: Neon pink/magenta
-  { base: 345, spread: 20 },   // Cluster 1: Rose/hot pink
-  { base: 25, spread: 30 },    // Cluster 2: Orange/coral
-];
+
+// Hue anchors for frequency bands
+const HUE_BASS = 270;       // Dark purple
+const HUE_MIDS = 310;       // Purple-pink
+const HUE_TREBLE = 25;      // Coral-orange (wraps around 0°)
+const HUE_BRIGHT = 50;      // Yellow-ish for "all high" state
 
 // BPM normalization - maps BPM to 0-1 scale for smooth animation blending
 // Low BPM (60-90) = calm/cool, High BPM (140-180) = energetic/warm
@@ -326,12 +327,21 @@ export function Blobulator() {
         lastSeedSecondRef.current = seedingElapsedSeconds;
       }
     } else {
-      // EQUILIBRIUM PHASE: Intensity controls spawn/death balance
+      // EQUILIBRIUM PHASE: Intensity + BPM control spawn/death balance
       const isIntense = intensity >= INTENSITY_THRESHOLD;
-      const spawnRate = isIntense ? SPAWN_RATE_INTENSE : SPAWN_RATE_CALM;
-      const deathRate = isIntense ? DEATH_RATE_INTENSE : DEATH_RATE_CALM;
+      const baseSpawnRate = isIntense ? SPAWN_RATE_INTENSE : SPAWN_RATE_CALM;
+      const baseDeathRate = isIntense ? DEATH_RATE_INTENSE : DEATH_RATE_CALM;
+
+      // BPM boost: higher BPM = faster spawn (up to 80% boost at max BPM)
+      const bpmSpawnBoost = 1 + bpmNormalized * 0.8;
+      // BPM also slightly reduces death rate at high tempos (keeps population up)
+      const bpmDeathReduction = 1 - bpmNormalized * 0.3;
+
+      // Bass boost: strong bass doubles spawn rate
       const bassBoost = features.bass > 0.5 ? 2 : 1;
-      const effectiveSpawnRate = spawnRate * bassBoost;
+
+      const effectiveSpawnRate = baseSpawnRate * bassBoost * bpmSpawnBoost;
+      const effectiveDeathRate = baseDeathRate * bpmDeathReduction;
 
       // Check if it's time to spawn
       const spawnInterval = 1000 / effectiveSpawnRate;
@@ -341,7 +351,7 @@ export function Blobulator() {
       }
 
       // Check if it's time to kill (only if we have enough blobs)
-      const deathInterval = 1000 / deathRate;
+      const deathInterval = 1000 / effectiveDeathRate;
       if (elapsedRef.current - lastDeathRef.current > deathInterval) {
         shouldKillOldest = true;
         lastDeathRef.current = elapsedRef.current;
@@ -608,44 +618,68 @@ export function Blobulator() {
   };
 
   // Calculate base HSL color for a blob (without neighbor blending)
-  // Color shifts based on BPM: cool (purple/blue/teal) at low BPM → warm (pink/orange) at high BPM
+  // 75% frequency mix (bass/mids/treble) + 25% intensity influence
+  // Bass = dark purple, Mids = purple→pink, Treble = pink→coral→orange
+  // High intensity + all frequencies = bright yellow/white (especially cluster 2)
   const getBlobBaseHSL = (blob: WaveFrontBlob): { h: number; s: number; l: number } => {
     const clusterIndex = getClusterIndex(blob.id);
-    const coolRange = CLUSTER_HUE_RANGES_COOL[clusterIndex];
-    const warmRange = CLUSTER_HUE_RANGES_WARM[clusterIndex];
+    const bias = CLUSTER_FREQUENCY_BIAS[clusterIndex];
 
-    // Interpolate between cool and warm hue ranges based on BPM
-    // Use easeInOut curve for smoother transitions
-    const easedBpm = bpmNormalized < 0.5
-      ? 2 * bpmNormalized * bpmNormalized
-      : 1 - Math.pow(-2 * bpmNormalized + 2, 2) / 2;
+    // Apply cluster bias to frequency values
+    const bass = features.bass * bias.bassWeight;
+    const mids = features.mid * bias.midsWeight;
+    const treble = features.treble * bias.trebleWeight;
+    const totalFreq = bass + mids + treble + 0.001; // Avoid division by zero
 
-    // Handle hue interpolation (wrapping around 360°)
-    let coolBase = coolRange.base;
-    let warmBase = warmRange.base;
-    // If warm is near 0° and cool is near 360°, adjust for shortest path
-    if (warmBase < 60 && coolBase > 200) {
-      warmBase += 360; // e.g., 25° → 385°
-    }
-    const interpolatedBase = coolBase + (warmBase - coolBase) * easedBpm;
-    const baseHue = ((interpolatedBase % 360) + 360) % 360;
+    // Normalize to get frequency mix ratios (0-1 each, sum to 1)
+    const bassRatio = bass / totalFreq;
+    const midsRatio = mids / totalFreq;
+    const trebleRatio = treble / totalFreq;
 
-    // Spread also interpolates
-    const spread = coolRange.spread + (warmRange.spread - coolRange.spread) * easedBpm;
+    // Calculate weighted hue from frequency mix (75% of color)
+    // Handle hue wrapping: treble (25°) is near bass (270°) on the color wheel
+    // Convert to vectors to average properly across the 0°/360° boundary
+    const bassAngle = HUE_BASS * Math.PI / 180;
+    const midsAngle = HUE_MIDS * Math.PI / 180;
+    const trebleAngle = HUE_TREBLE * Math.PI / 180;
 
-    // Per-blob variation within cluster's spread
-    const blobHueVariation = (blob.colorIndex % 5) * (spread / 5);
+    const x = bassRatio * Math.cos(bassAngle) + midsRatio * Math.cos(midsAngle) + trebleRatio * Math.cos(trebleAngle);
+    const y = bassRatio * Math.sin(bassAngle) + midsRatio * Math.sin(midsAngle) + trebleRatio * Math.sin(trebleAngle);
+    let frequencyHue = Math.atan2(y, x) * 180 / Math.PI;
+    if (frequencyHue < 0) frequencyHue += 360;
 
-    // Bass/treble shifts add subtle audio-reactive color changes
-    const audioHueShift = (features.bass - features.treble) * 20;
-    const hue = ((baseHue + blobHueVariation + audioHueShift) % 360 + 360) % 360;
+    // Intensity influence (25% of color) - pushes toward warmer hues
+    // Higher intensity = shift toward pink/orange (add ~40° at max intensity)
+    const intensityHueShift = intensity * 40;
 
-    // Saturation and lightness increase with BPM for that neon pop
-    const baseSaturation = 70 + bpmNormalized * 20;  // 70% at low BPM → 90% at high BPM
-    const saturation = baseSaturation + features.amplitude * 10;
-    const lightness = 50 + bpmNormalized * 10 + features.amplitude * 10;  // 50-70%
+    // Combine: 75% frequency + 25% intensity
+    let baseHue = frequencyHue * 0.75 + (frequencyHue + intensityHueShift) * 0.25;
 
-    return { h: hue, s: Math.min(100, saturation), l: Math.min(75, lightness) };
+    // Per-blob variation (±15° based on colorIndex)
+    const blobHueVariation = ((blob.colorIndex % 5) - 2) * 6;
+    baseHue = ((baseHue + blobHueVariation) % 360 + 360) % 360;
+
+    // "All high" bright mode: when intensity AND all frequencies are elevated
+    // Cluster 2 (treble-leaning) goes brightest, others get a boost too
+    const allHigh = Math.min(features.bass, features.mid, features.treble);
+    const brightFactor = allHigh * intensity; // 0-1 scale, only high when BOTH conditions met
+
+    // Cluster 2 can reach yellow (50°), others shift slightly toward it
+    const brightShift = clusterIndex === 2
+      ? brightFactor * (HUE_BRIGHT - baseHue) * 0.6  // Strong shift to yellow
+      : brightFactor * 15;  // Subtle warm shift for other clusters
+    baseHue = ((baseHue + brightShift) % 360 + 360) % 360;
+
+    // Saturation: high bass = richer, high intensity = more neon
+    const baseSaturation = 65 + features.bass * 15 + intensity * 20;
+
+    // Lightness: base 50%, brighter with treble and intensity
+    // "All high" pushes toward white (up to 85% lightness for cluster 2)
+    const baseLightness = 50 + features.treble * 10 + intensity * 10;
+    const brightLightnessBoost = clusterIndex === 2 ? brightFactor * 20 : brightFactor * 10;
+    const lightness = Math.min(85, baseLightness + brightLightnessBoost);
+
+    return { h: baseHue, s: Math.min(100, baseSaturation), l: lightness };
   };
 
   // Dynamic color with neighbor blending - blobs become more similar when close
