@@ -32,6 +32,7 @@ const DEFAULT_BPM = 120;             // Fallback BPM before detection stabilizes
 const BPM_INPUT_GAIN = 15;           // Amplify microphone signal for BPM detection (mic is weak)
 const BPM_SMOOTHING = 0.97;          // Very heavy smoothing - only 3% of new value per update
 const BPM_JUMP_THRESHOLD = 15;       // Ignore jumps larger than 15 BPM (tighter filter)
+const BPM_UPDATE_INTERVAL_MS = 1000; // Max 1 BPM display update per second (prevents flickering)
 
 interface AdaptiveState {
   amplitudeHistory: number[];
@@ -104,6 +105,8 @@ export function useAdaptiveAudio(): AdaptiveAudioResult {
   const bpmAnalyzerRef = useRef<BpmAnalyzer | null>(null);
   const animationRef = useRef<number | null>(null);
   const lastSampleTimeRef = useRef<number>(0);
+  const lastBpmUpdateTimeRef = useRef<number>(0);  // Rate-limit BPM display updates
+  const pendingBpmRef = useRef<number>(DEFAULT_BPM);  // Accumulate smoothed BPM between updates
   const streamRef = useRef<MediaStream | null>(null);
 
   // Calculate statistics from history
@@ -198,29 +201,37 @@ export function useAdaptiveAudio(): AdaptiveAudioResult {
         console.log(`BPM analyzer initialized with ${BPM_INPUT_GAIN}x gain boost for microphone input`);
 
         // Listen for BPM events using event emitter API
-        // Apply smoothing to avoid flickering between values
+        // Rate-limited: accumulate smoothed values, only update display 1x/second
         bpmAnalyzer.on('bpm', (data) => {
           if (data.bpm && data.bpm.length > 0) {
             const topResult = data.bpm[0];
             const newBpm = topResult.tempo;
+            const now = performance.now();
 
-            setAdaptiveState(prev => {
-              // Check for large jumps (likely octave errors like 60 vs 120)
-              const bpmDiff = Math.abs(newBpm - prev.bpm);
-              if (bpmDiff > BPM_JUMP_THRESHOLD && prev.bpmConfidence > 0.3) {
-                // Ignore wild jumps when we already have some confidence
-                return prev;
-              }
+            // Always apply smoothing to pending value (accumulate between updates)
+            const bpmDiff = Math.abs(newBpm - pendingBpmRef.current);
+            if (bpmDiff <= BPM_JUMP_THRESHOLD || pendingBpmRef.current === DEFAULT_BPM) {
+              // Apply exponential smoothing to pending value
+              pendingBpmRef.current = pendingBpmRef.current * BPM_SMOOTHING + newBpm * (1 - BPM_SMOOTHING);
+            }
 
-              // Apply exponential smoothing
-              const smoothedBpm = prev.bpm * BPM_SMOOTHING + newBpm * (1 - BPM_SMOOTHING);
+            // Only update React state once per second (prevents UI flickering)
+            if (now - lastBpmUpdateTimeRef.current >= BPM_UPDATE_INTERVAL_MS) {
+              lastBpmUpdateTimeRef.current = now;
+              const displayBpm = Math.round(pendingBpmRef.current);
 
-              return {
-                ...prev,
-                bpm: Math.round(smoothedBpm),
-                bpmConfidence: Math.min(1, topResult.count / 100),
-              };
-            });
+              setAdaptiveState(prev => {
+                // Skip if no meaningful change
+                if (prev.bpm === displayBpm) {
+                  return { ...prev, bpmConfidence: Math.min(1, topResult.count / 100) };
+                }
+                return {
+                  ...prev,
+                  bpm: displayBpm,
+                  bpmConfidence: Math.min(1, topResult.count / 100),
+                };
+              });
+            }
           }
         });
 
@@ -228,20 +239,20 @@ export function useAdaptiveAudio(): AdaptiveAudioResult {
           console.log('BPM stable:', data.bpm?.[0]?.tempo);
           if (data.bpm && data.bpm.length > 0) {
             const topResult = data.bpm[0];
-            // Stable events - still use smoothing to avoid jumps
-            setAdaptiveState(prev => {
-              const bpmDiff = Math.abs(topResult.tempo - prev.bpm);
-              // Ignore even stable events if they're too different
-              if (bpmDiff > BPM_JUMP_THRESHOLD * 2) {
-                return { ...prev, bpmConfidence: 1 };
-              }
-              const smoothedBpm = prev.bpm * 0.8 + topResult.tempo * 0.2;
-              return {
-                ...prev,
-                bpm: Math.round(smoothedBpm),
-                bpmConfidence: 1,
-              };
-            });
+            const bpmDiff = Math.abs(topResult.tempo - pendingBpmRef.current);
+
+            // Stable events get priority - update pending value with stronger weight
+            if (bpmDiff <= BPM_JUMP_THRESHOLD * 2) {
+              pendingBpmRef.current = pendingBpmRef.current * 0.7 + topResult.tempo * 0.3;
+            }
+
+            // Force display update on stable event (these are rare)
+            lastBpmUpdateTimeRef.current = 0;  // Reset to allow immediate update
+            setAdaptiveState(prev => ({
+              ...prev,
+              bpm: Math.round(pendingBpmRef.current),
+              bpmConfidence: 1,
+            }));
           }
         });
 

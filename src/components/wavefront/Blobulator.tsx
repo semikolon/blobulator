@@ -18,8 +18,6 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import type { WaveFrontBlob, BlobFieldConfig } from './types';
 import { DEFAULT_CONFIG } from './types';
 import {
-  generateInitialBlobs,
-  spawnFromFrontier,
   updateBlobVelocity,
   recycleBlobsAtEdge,
 } from './physics';
@@ -58,6 +56,18 @@ const CLUSTER_HUE_RANGES_WARM = [
 // Low BPM (60-90) = calm/cool, High BPM (140-180) = energetic/warm
 const BPM_MIN = 70;   // Below this = fully calm (0)
 const BPM_MAX = 150;  // Above this = fully energetic (1)
+
+// Spawning lifecycle configuration
+// Phase 1: Seed the stage with diminishing spawns
+// Phase 2: Intensity-driven spawn/death equilibrium
+const SEED_BLOBS_INITIAL = 50;        // First second: spawn 50 blobs
+const SEED_DECAY_FACTOR = 0.4;        // Each second: spawn 40% of previous (50→20→8→3...)
+const SEED_DURATION_SECONDS = 5;       // Seeding phase lasts 5 seconds
+const SPAWN_RATE_CALM = 0.5;          // Blobs/second when intensity < 70%
+const SPAWN_RATE_INTENSE = 3;         // Blobs/second when intensity > 70%
+const DEATH_RATE_CALM = 1.5;          // Blobs/second dying when intensity < 70%
+const DEATH_RATE_INTENSE = 0.5;       // Blobs/second dying when intensity > 70%
+const INTENSITY_THRESHOLD = 0.7;      // Below this: more die than spawn
 
 // Note: Cluster pulsing constants removed (feature disabled)
 // Can be re-added from git history if needed
@@ -169,20 +179,43 @@ export function Blobulator() {
 
   const animationRef = useRef<number | null>(null);
   const lastSpawnRef = useRef<number>(0);
+  const lastDeathRef = useRef<number>(0);
   const elapsedRef = useRef<number>(0);
   const lastFrameRef = useRef<number>(0);
+
+  // Seeding phase state
+  const seedingStartTimeRef = useRef<number>(0);
+  const lastSeedSecondRef = useRef<number>(-1);  // Track which second of seeding we're in
 
   // BPM normalized to 0-1 scale (changes slowly, good for color/style blending)
   // Low BPM (70) = 0 (calm), High BPM (150) = 1 (energetic)
   const bpmNormalized = Math.max(0, Math.min(1, (bpm - BPM_MIN) / (BPM_MAX - BPM_MIN)));
 
-  // Note: Cluster pulsing is DISABLED for now (constants preserved for future re-enabling)
+  // Create a new blob at random position near center
+  const createRandomBlob = useCallback((): WaveFrontBlob => {
+    const angle = Math.random() * Math.PI * 2;
+    const distance = Math.random() * 150 + 50;  // 50-200px from center
+    return {
+      id: `blob-${Math.random().toString(36).slice(2, 11)}`,
+      x: Math.cos(angle) * distance,
+      y: Math.sin(angle) * distance,
+      vx: (Math.random() - 0.5) * 0.5,
+      vy: (Math.random() - 0.5) * 0.5,
+      direction: Math.random() * Math.PI * 2,
+      generation: 0,
+      size: config.baseBlobSize * (0.8 + Math.random() * 0.4),  // ±20% size variation
+      age: 0,
+      isFrontier: true,
+      colorIndex: Math.floor(Math.random() * 5),
+    };
+  }, [config.baseBlobSize]);
 
-  // Initialize blobs
+  // Initialize - start empty, seeding will populate
   useEffect(() => {
-    const initialBlobs = generateInitialBlobs(0, 0, config);
-    setBlobs(initialBlobs);
+    setBlobs([]);
     lastFrameRef.current = performance.now();
+    seedingStartTimeRef.current = performance.now();
+    lastSeedSecondRef.current = -1;
   }, [config]);
 
   // Handle window resize
@@ -379,43 +412,87 @@ export function Blobulator() {
         }
       }
 
-      // 5. Spawning - rate scales with BPM and bass
-      //    Even at low BPM, occasional spawning keeps things alive
-      const baseSpawnInterval = config.spawnIntervalMs;
-      const bpmSpawnBoost = bpmNormalized * 400;    // Faster spawning at high BPM
-      const bassSpawnBoost = features.bass * 200;   // Bass hits trigger spawns
-      const spawnInterval = Math.max(150, baseSpawnInterval - bpmSpawnBoost - bassSpawnBoost);
+      // ===== SPAWNING LIFECYCLE SYSTEM =====
+      // Phase 1: Seeding - diminishing spawns to populate the stage
+      // Phase 2: Equilibrium - intensity-driven spawn/death balance
 
-      if (elapsedRef.current - lastSpawnRef.current > spawnInterval) {
-        const frontier = updatedBlobs.filter(b => b.isFrontier);
-        if (frontier.length > 0) {
-          const newBlobs = spawnFromFrontier(frontier, config);
+      const now = performance.now();
+      const seedingElapsedMs = now - seedingStartTimeRef.current;
+      const seedingElapsedSeconds = Math.floor(seedingElapsedMs / 1000);
+      const isSeeding = seedingElapsedSeconds < SEED_DURATION_SECONDS;
+
+      if (isSeeding) {
+        // SEEDING PHASE: Spawn diminishing batches each second
+        if (seedingElapsedSeconds > lastSeedSecondRef.current) {
+          lastSeedSecondRef.current = seedingElapsedSeconds;
+
+          // Calculate how many blobs to spawn this second
+          // Second 0: 50, Second 1: 20, Second 2: 8, Second 3: 3, Second 4: 1
+          const blobsToSpawn = Math.max(1, Math.round(
+            SEED_BLOBS_INITIAL * Math.pow(SEED_DECAY_FACTOR, seedingElapsedSeconds)
+          ));
+
+          // Create the batch
+          const newBlobs: WaveFrontBlob[] = [];
+          for (let i = 0; i < blobsToSpawn; i++) {
+            newBlobs.push(createRandomBlob());
+          }
           updatedBlobs = [...updatedBlobs, ...newBlobs];
         }
-        lastSpawnRef.current = elapsedRef.current;
+      } else {
+        // EQUILIBRIUM PHASE: Intensity controls spawn/death balance
+
+        // Determine spawn and death rates based on intensity
+        const isIntense = intensity >= INTENSITY_THRESHOLD;
+        const spawnRate = isIntense ? SPAWN_RATE_INTENSE : SPAWN_RATE_CALM;
+        const deathRate = isIntense ? DEATH_RATE_INTENSE : DEATH_RATE_CALM;
+
+        // Bass hits boost spawn rate temporarily
+        const bassBoost = features.bass > 0.5 ? 2 : 1;
+        const effectiveSpawnRate = spawnRate * bassBoost;
+
+        // Spawn new blobs (rate = blobs per second → interval = 1000/rate ms)
+        const spawnInterval = 1000 / effectiveSpawnRate;
+        if (elapsedRef.current - lastSpawnRef.current > spawnInterval) {
+          updatedBlobs.push(createRandomBlob());
+          lastSpawnRef.current = elapsedRef.current;
+        }
+
+        // Kill old blobs (shrink and remove oldest ones)
+        const deathInterval = 1000 / deathRate;
+        if (elapsedRef.current - lastDeathRef.current > deathInterval && updatedBlobs.length > 20) {
+          // Find oldest blob and mark for death (smallest blobs die first for visual smoothness)
+          const oldestIndex = updatedBlobs.reduce((oldest, blob, idx) =>
+            blob.age > updatedBlobs[oldest].age ? idx : oldest, 0);
+
+          // Remove the oldest blob
+          updatedBlobs.splice(oldestIndex, 1);
+          lastDeathRef.current = elapsedRef.current;
+        }
       }
 
       // Recycle blobs that have left the viewport
       updatedBlobs = recycleBlobsAtEdge(updatedBlobs, viewport.width, viewport.height, 200);
 
-      // Re-seed if we're running low on blobs
-      if (updatedBlobs.length < 50) {
-        const newCoreBlobs = generateInitialBlobs(0, 0, config);
-        updatedBlobs = [...updatedBlobs, ...newCoreBlobs];
+      // Emergency re-seed if we're running critically low
+      if (updatedBlobs.length < 10) {
+        for (let i = 0; i < 20; i++) {
+          updatedBlobs.push(createRandomBlob());
+        }
       }
 
       // Limit total blob count for performance
-      if (updatedBlobs.length > 500) {
+      if (updatedBlobs.length > 300) {
         updatedBlobs = updatedBlobs
           .sort((a, b) => a.age - b.age)
-          .slice(-400);
+          .slice(-250);
       }
 
       return updatedBlobs;
     });
 
     animationRef.current = requestAnimationFrame(animate);
-  }, [config, features, viewport, intensity, isPaused]);
+  }, [config, features, viewport, intensity, isPaused, createRandomBlob]);
 
   // Start/stop animation
   useEffect(() => {
