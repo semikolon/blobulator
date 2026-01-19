@@ -160,8 +160,30 @@ const styles = {
   },
 };
 
+// Helper to create a blob (used for initial state before component mounts)
+function createBlob(baseBlobSize: number): WaveFrontBlob {
+  const angle = Math.random() * Math.PI * 2;
+  const distance = Math.random() * 150 + 50;
+  return {
+    id: `blob-${Math.random().toString(36).slice(2, 11)}`,
+    x: Math.cos(angle) * distance,
+    y: Math.sin(angle) * distance,
+    vx: (Math.random() - 0.5) * 0.5,
+    vy: (Math.random() - 0.5) * 0.5,
+    direction: Math.random() * Math.PI * 2,
+    generation: 0,
+    size: baseBlobSize * (0.8 + Math.random() * 0.4),
+    age: 0,
+    isFrontier: true,
+    colorIndex: Math.floor(Math.random() * 5),
+  };
+}
+
 export function Blobulator() {
-  const [blobs, setBlobs] = useState<WaveFrontBlob[]>([]);
+  // Initialize with 50 blobs immediately (no timing dependencies)
+  const [blobs, setBlobs] = useState<WaveFrontBlob[]>(() =>
+    Array.from({ length: SEED_BLOBS_INITIAL }, () => createBlob(DEFAULT_CONFIG.baseBlobSize))
+  );
   const [config] = useState<BlobFieldConfig>(DEFAULT_CONFIG);
   const [viewport, setViewport] = useState({ width: window.innerWidth, height: window.innerHeight });
   const [isPaused, setIsPaused] = useState(false);
@@ -210,13 +232,12 @@ export function Blobulator() {
     };
   }, [config.baseBlobSize]);
 
-  // Initialize - start empty, seeding will populate
+  // Initialize timing refs
   useEffect(() => {
-    setBlobs([]);
     lastFrameRef.current = performance.now();
     seedingStartTimeRef.current = performance.now();
-    lastSeedSecondRef.current = -1;
-  }, [config]);
+    lastSeedSecondRef.current = 0;  // Start at 0 since initial blobs already created
+  }, []);
 
   // Handle window resize
   useEffect(() => {
