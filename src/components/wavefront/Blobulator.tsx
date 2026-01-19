@@ -89,7 +89,8 @@ const MAX_GRAVITY_CENTERS = 3;        // Maximum active gravity wells
 const GRAVITY_CENTER_RADIUS = 150;    // Radius to detect blob clusters
 const GRAVITY_CENTER_MIN_BLOBS = 8;   // Min blobs to form a gravity center
 const GRAVITY_CENTER_STRENGTH = 0.000025;  // Pull strength per center
-const GRAVITY_CENTER_UPDATE_MS = 500; // How often to recalculate centers
+const GRAVITY_CENTER_UPDATE_MS = 500; // How often to recalculate target centers
+const GRAVITY_CENTER_LERP = 0.03;     // Smoothing factor: 0.03 = ~1s to reach target (smooth)
 const FIXED_CENTER_GRAVITY = 0.000001; // Much weaker fixed center (was 0.000008)
 
 // Get cluster index from blob ID (uses random part for even distribution)
@@ -234,7 +235,9 @@ export function Blobulator({ audio }: BlobulatorProps) {
   const lastSeedSecondRef = useRef<number>(-1);  // Track which second of seeding we're in
 
   // Dynamic gravity centers - form where blobs congregate
+  // Target centers are recalculated periodically; actual centers lerp toward them
   const gravityCentersRef = useRef<Array<{ x: number; y: number; strength: number }>>([]);
+  const targetGravityCentersRef = useRef<Array<{ x: number; y: number; strength: number }>>([]);
   const lastGravityUpdateRef = useRef<number>(0);
 
   // Display time (updated once per second to avoid excessive re-renders)
@@ -483,7 +486,7 @@ export function Blobulator({ audio }: BlobulatorProps) {
       }
 
       // === DYNAMIC GRAVITY CENTERS ===
-      // Periodically detect clusters and update gravity centers
+      // Periodically detect clusters and update TARGET gravity centers
       const now = performance.now();
       if (now - lastGravityUpdateRef.current > GRAVITY_CENTER_UPDATE_MS) {
         lastGravityUpdateRef.current = now;
@@ -512,12 +515,42 @@ export function Blobulator({ audio }: BlobulatorProps) {
           .sort((a, b) => b.count - a.count)
           .slice(0, MAX_GRAVITY_CENTERS);
 
-        // Convert to gravity centers with averaged position
-        gravityCentersRef.current = candidates.map(cell => ({
+        // Update TARGET gravity centers (not actual - those are lerped below)
+        targetGravityCentersRef.current = candidates.map(cell => ({
           x: cell.sumX / cell.count,
           y: cell.sumY / cell.count,
-          strength: GRAVITY_CENTER_STRENGTH * Math.min(1, cell.count / 20), // Strength scales with density
+          strength: GRAVITY_CENTER_STRENGTH * Math.min(1, cell.count / 20),
         }));
+
+        // Initialize actual centers if empty (first run)
+        if (gravityCentersRef.current.length === 0 && targetGravityCentersRef.current.length > 0) {
+          gravityCentersRef.current = targetGravityCentersRef.current.map(t => ({ ...t }));
+        }
+      }
+
+      // SMOOTH LERP: Actual gravity centers move toward targets every frame
+      // This prevents jarring "jolt" when targets recalculate
+      const targets = targetGravityCentersRef.current;
+      const actuals = gravityCentersRef.current;
+
+      // Match array lengths (add/remove centers smoothly)
+      while (actuals.length < targets.length) {
+        // New center appears - start at target position (no lerp needed for new ones)
+        actuals.push({ ...targets[actuals.length] });
+      }
+      while (actuals.length > targets.length) {
+        // Center disappeared - remove oldest (or we could fade out strength)
+        actuals.pop();
+      }
+
+      // Lerp each center toward its target
+      for (let i = 0; i < actuals.length; i++) {
+        const actual = actuals[i];
+        const target = targets[i];
+        // Smooth interpolation: actual += (target - actual) * lerp
+        actual.x += (target.x - actual.x) * GRAVITY_CENTER_LERP;
+        actual.y += (target.y - actual.y) * GRAVITY_CENTER_LERP;
+        actual.strength += (target.strength - actual.strength) * GRAVITY_CENTER_LERP;
       }
 
       const centerX = viewport.width / 2;
