@@ -91,10 +91,12 @@ const GRAVITY_CENTER_MIN_BLOBS = 8;   // Min blobs to form a gravity center
 const GRAVITY_CENTER_STRENGTH = 0.000025;  // Pull strength per center
 const GRAVITY_CENTER_UPDATE_MS = 500; // How often to recalculate target centers
 const GRAVITY_CENTER_LERP = 0.03;     // Smoothing factor: 0.03 = ~1s to reach target (smooth)
+const GRAVITY_CENTER_FADE_THRESHOLD = 0.000001; // Remove centers when strength falls below this
 const FIXED_CENTER_GRAVITY = 0.000001; // Much weaker fixed center (was 0.000008)
 
 // Spatial hash configuration for O(n) neighbor lookups instead of O(n²)
 const SPATIAL_HASH_CELL_SIZE = 100;   // Must be >= BLOB_INFLUENCE_RADIUS (80px)
+const SPATIAL_HASH_MIN_BLOBS = 50;    // Below this, O(n²) is faster than hash overhead
 
 /**
  * Spatial Hash Grid - enables O(n) neighbor lookups instead of O(n²)
@@ -595,28 +597,33 @@ export function Blobulator({ audio }: BlobulatorProps) {
 
       // SMOOTH LERP: Actual gravity centers move toward targets every frame
       // This prevents jarring "jolt" when targets recalculate
+      // New centers fade IN (start at strength 0), dying centers fade OUT (lerp to 0)
       const targets = targetGravityCentersRef.current;
       const actuals = gravityCentersRef.current;
 
-      // Match array lengths (add/remove centers smoothly)
+      // 1. Add new centers with strength 0 (they'll fade in via lerp)
       while (actuals.length < targets.length) {
-        // New center appears - start at target position (no lerp needed for new ones)
-        actuals.push({ ...targets[actuals.length] });
-      }
-      while (actuals.length > targets.length) {
-        // Center disappeared - remove oldest (or we could fade out strength)
-        actuals.pop();
+        const newTarget = targets[actuals.length];
+        actuals.push({ x: newTarget.x, y: newTarget.y, strength: 0 }); // Fade in from 0
       }
 
-      // Lerp each center toward its target
+      // 2. Lerp all actuals toward their targets (or toward 0 for extras)
       for (let i = 0; i < actuals.length; i++) {
         const actual = actuals[i];
-        const target = targets[i];
-        // Smooth interpolation: actual += (target - actual) * lerp
-        actual.x += (target.x - actual.x) * GRAVITY_CENTER_LERP;
-        actual.y += (target.y - actual.y) * GRAVITY_CENTER_LERP;
-        actual.strength += (target.strength - actual.strength) * GRAVITY_CENTER_LERP;
+        if (i < targets.length) {
+          // Active center: lerp toward target
+          const target = targets[i];
+          actual.x += (target.x - actual.x) * GRAVITY_CENTER_LERP;
+          actual.y += (target.y - actual.y) * GRAVITY_CENTER_LERP;
+          actual.strength += (target.strength - actual.strength) * GRAVITY_CENTER_LERP;
+        } else {
+          // Dying center: lerp strength toward 0 (fade out)
+          actual.strength += (0 - actual.strength) * GRAVITY_CENTER_LERP;
+        }
       }
+
+      // 3. Remove fully faded centers (strength below threshold)
+      gravityCentersRef.current = actuals.filter(c => c.strength > GRAVITY_CENTER_FADE_THRESHOLD);
 
       const centerX = viewport.width / 2;
       const centerY = viewport.height / 2;
@@ -665,7 +672,9 @@ export function Blobulator({ audio }: BlobulatorProps) {
 
       // 4. Blob-to-blob direction influence - nearby blobs align velocities
       //    Similar to flocking behavior, creates more organic flow
-      //    Uses spatial hash for O(n) lookups instead of O(n²)
+      //    Uses spatial hash for O(n) lookups when blob count >= threshold
+      const useSpatialHash = updatedBlobs.length >= SPATIAL_HASH_MIN_BLOBS;
+
       for (let i = 0; i < updatedBlobs.length; i++) {
         const blob = updatedBlobs[i];
         if (blob.age < INFLUENCE_MIN_AGE) continue;
@@ -674,9 +683,12 @@ export function Blobulator({ audio }: BlobulatorProps) {
         let avgVy = 0;
         let neighborCount = 0;
 
-        // Only check blobs in nearby cells (9 cells max)
-        const neighborIndices = spatialHashRef.current.getNeighborIndices(blob.x, blob.y);
-        for (const j of neighborIndices) {
+        // Use spatial hash for large counts, naive loop for small counts
+        const checkIndices = useSpatialHash
+          ? spatialHashRef.current.getNeighborIndices(blob.x, blob.y)
+          : updatedBlobs.map((_, idx) => idx);
+
+        for (const j of checkIndices) {
           if (i === j) continue;
           const other = updatedBlobs[j];
           if (other.age < INFLUENCE_MIN_AGE) continue;
@@ -793,11 +805,12 @@ export function Blobulator({ audio }: BlobulatorProps) {
     const clusterPulseMultiplier = 1.0;
 
     // Neighbor size influence - nearby larger blobs make this blob slightly larger
-    // Uses spatial hash for O(n) lookups instead of O(n²)
+    // Uses spatial hash for O(n) lookups when blob count >= threshold
     let neighborSizeInfluence = 1.0;
     if (blob.age >= INFLUENCE_MIN_AGE) {
-      // Ensure spatial hash is current for this render pass
-      if (spatialHashBlobsRef.current !== blobs) {
+      // Ensure spatial hash is current for this render pass (only if using it)
+      const useSpatialHash = blobs.length >= SPATIAL_HASH_MIN_BLOBS;
+      if (useSpatialHash && spatialHashBlobsRef.current !== blobs) {
         spatialHashRef.current.rebuild(blobs);
         spatialHashBlobsRef.current = blobs;
       }
@@ -805,9 +818,12 @@ export function Blobulator({ audio }: BlobulatorProps) {
       let totalInfluence = 0;
       let totalWeight = 0;
 
-      // Only check blobs in nearby cells (9 cells max)
-      const neighborIndices = spatialHashRef.current.getNeighborIndices(blob.x, blob.y);
-      for (const i of neighborIndices) {
+      // Use spatial hash for large counts, naive loop for small counts
+      const checkIndices = useSpatialHash
+        ? spatialHashRef.current.getNeighborIndices(blob.x, blob.y)
+        : blobs.map((_, idx) => idx);
+
+      for (const i of checkIndices) {
         if (i === index) continue;
         const other = blobs[i];
         if (other.age < INFLUENCE_MIN_AGE) continue;
@@ -907,7 +923,7 @@ export function Blobulator({ audio }: BlobulatorProps) {
   };
 
   // Dynamic color with neighbor blending - blobs become more similar when close
-  // Uses spatial hash for O(n) lookups instead of O(n²)
+  // Uses spatial hash for O(n) lookups when blob count >= threshold
   const getDynamicColor = (blob: WaveFrontBlob, index: number) => {
     const baseColor = getBlobBaseHSL(blob);
 
@@ -916,8 +932,9 @@ export function Blobulator({ audio }: BlobulatorProps) {
       return `hsl(${baseColor.h}, ${baseColor.s}%, ${baseColor.l}%)`;
     }
 
-    // Ensure spatial hash is current for this render pass
-    if (spatialHashBlobsRef.current !== blobs) {
+    // Ensure spatial hash is current for this render pass (only if using it)
+    const useSpatialHash = blobs.length >= SPATIAL_HASH_MIN_BLOBS;
+    if (useSpatialHash && spatialHashBlobsRef.current !== blobs) {
       spatialHashRef.current.rebuild(blobs);
       spatialHashBlobsRef.current = blobs;
     }
@@ -928,9 +945,12 @@ export function Blobulator({ audio }: BlobulatorProps) {
     let weightedSat = 0;
     let weightedLight = 0;
 
-    // Only check blobs in nearby cells (9 cells max)
-    const neighborIndices = spatialHashRef.current.getNeighborIndices(blob.x, blob.y);
-    for (const i of neighborIndices) {
+    // Use spatial hash for large counts, naive loop for small counts
+    const checkIndices = useSpatialHash
+      ? spatialHashRef.current.getNeighborIndices(blob.x, blob.y)
+      : blobs.map((_, idx) => idx);
+
+    for (const i of checkIndices) {
       if (i === index) continue; // Skip self
 
       const other = blobs[i];
@@ -1071,17 +1091,21 @@ export function Blobulator({ audio }: BlobulatorProps) {
         </g>
 
         {/* Gravity center indicators - dots showing where blobs congregate */}
-        {gravityCentersRef.current.map((center, i) => (
-          <circle
-            key={`gravity-${i}`}
-            cx={centerX + center.x}
-            cy={centerY + center.y}
-            r={6}
-            fill="white"
-            stroke="rgba(0, 0, 0, 0.6)"
-            strokeWidth={2}
-          />
-        ))}
+        {/* Opacity fades with strength (fade-in/fade-out effect) */}
+        {gravityCentersRef.current.map((center, i) => {
+          const opacity = Math.min(1, center.strength / GRAVITY_CENTER_STRENGTH);
+          return (
+            <circle
+              key={`gravity-${i}`}
+              cx={centerX + center.x}
+              cy={centerY + center.y}
+              r={6}
+              fill={`rgba(255, 255, 255, ${opacity})`}
+              stroke={`rgba(0, 0, 0, ${opacity * 0.6})`}
+              strokeWidth={2}
+            />
+          );
+        })}
       </svg>
     </div>
   );
