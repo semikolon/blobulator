@@ -204,10 +204,14 @@ export function Blobulator() {
   const lastDeathRef = useRef<number>(0);
   const elapsedRef = useRef<number>(0);
   const lastFrameRef = useRef<number>(0);
+  const lastDisplayUpdateRef = useRef<number>(0);
 
   // Seeding phase state
   const seedingStartTimeRef = useRef<number>(0);
   const lastSeedSecondRef = useRef<number>(-1);  // Track which second of seeding we're in
+
+  // Display time (updated once per second to avoid excessive re-renders)
+  const [displayTime, setDisplayTime] = useState(0);
 
   // BPM normalized to 0-1 scale (changes slowly, good for color/style blending)
   // Low BPM (70) = 0 (calm), High BPM (150) = 1 (energetic)
@@ -292,6 +296,63 @@ export function Blobulator() {
     const deltaMs = timestamp - lastFrameRef.current;
     lastFrameRef.current = timestamp;
     elapsedRef.current += deltaMs;
+
+    // ===== SPAWN/DEATH DECISIONS (outside setBlobs to avoid Strict Mode issues) =====
+    // Calculate how many blobs to spawn/kill BEFORE calling setBlobs
+    // Refs are mutated here, not inside the state update callback
+
+    const now = performance.now();
+
+    // Initialize seeding start time on first frame
+    if (seedingStartTimeRef.current === 0) {
+      seedingStartTimeRef.current = now;
+    }
+
+    const seedingElapsedMs = now - seedingStartTimeRef.current;
+    const seedingElapsedSeconds = Math.floor(seedingElapsedMs / 1000);
+    const isSeeding = seedingElapsedSeconds < SEED_DURATION_SECONDS;
+
+    let spawnCount = 0;
+    let shouldKillOldest = false;
+
+    if (isSeeding) {
+      // SEEDING PHASE: Spawn diminishing batches each second
+      if (seedingElapsedSeconds > lastSeedSecondRef.current) {
+        // Calculate how many blobs to spawn this second
+        spawnCount = Math.max(1, Math.round(
+          SEED_BLOBS_INITIAL * Math.pow(SEED_DECAY_FACTOR, seedingElapsedSeconds)
+        ));
+        lastSeedSecondRef.current = seedingElapsedSeconds;
+      }
+    } else {
+      // EQUILIBRIUM PHASE: Intensity controls spawn/death balance
+      const isIntense = intensity >= INTENSITY_THRESHOLD;
+      const spawnRate = isIntense ? SPAWN_RATE_INTENSE : SPAWN_RATE_CALM;
+      const deathRate = isIntense ? DEATH_RATE_INTENSE : DEATH_RATE_CALM;
+      const bassBoost = features.bass > 0.5 ? 2 : 1;
+      const effectiveSpawnRate = spawnRate * bassBoost;
+
+      // Check if it's time to spawn
+      const spawnInterval = 1000 / effectiveSpawnRate;
+      if (elapsedRef.current - lastSpawnRef.current > spawnInterval) {
+        spawnCount = 1;
+        lastSpawnRef.current = elapsedRef.current;
+      }
+
+      // Check if it's time to kill (only if we have enough blobs)
+      const deathInterval = 1000 / deathRate;
+      if (elapsedRef.current - lastDeathRef.current > deathInterval) {
+        shouldKillOldest = true;
+        lastDeathRef.current = elapsedRef.current;
+      }
+    }
+
+    // Update display time once per second
+    const currentSecond = Math.floor(elapsedRef.current / 1000);
+    if (currentSecond !== lastDisplayUpdateRef.current) {
+      lastDisplayUpdateRef.current = currentSecond;
+      setDisplayTime(currentSecond);
+    }
 
     setBlobs(currentBlobs => {
       let updatedBlobs = [...currentBlobs];
@@ -433,69 +494,21 @@ export function Blobulator() {
         }
       }
 
-      // ===== SPAWNING LIFECYCLE SYSTEM =====
-      // Phase 1: Seeding - diminishing spawns to populate the stage
-      // Phase 2: Equilibrium - intensity-driven spawn/death balance
+      // ===== APPLY SPAWN/DEATH (pure state transformation using pre-calculated values) =====
+      // spawnCount and shouldKillOldest were calculated outside setBlobs to avoid Strict Mode issues
 
-      const now = performance.now();
-
-      // Initialize seeding start time on first frame (fixes race condition with useEffect)
-      if (seedingStartTimeRef.current === 0) {
-        seedingStartTimeRef.current = now;
+      // Spawn new blobs
+      if (spawnCount > 0) {
+        for (let i = 0; i < spawnCount; i++) {
+          updatedBlobs.push(createRandomBlob());
+        }
       }
 
-      const seedingElapsedMs = now - seedingStartTimeRef.current;
-      const seedingElapsedSeconds = Math.floor(seedingElapsedMs / 1000);
-      const isSeeding = seedingElapsedSeconds < SEED_DURATION_SECONDS;
-
-      if (isSeeding) {
-        // SEEDING PHASE: Spawn diminishing batches each second
-        if (seedingElapsedSeconds > lastSeedSecondRef.current) {
-          lastSeedSecondRef.current = seedingElapsedSeconds;
-
-          // Calculate how many blobs to spawn this second
-          // Second 0: 50, Second 1: 20, Second 2: 8, Second 3: 3, Second 4: 1
-          const blobsToSpawn = Math.max(1, Math.round(
-            SEED_BLOBS_INITIAL * Math.pow(SEED_DECAY_FACTOR, seedingElapsedSeconds)
-          ));
-
-          // Create the batch
-          const newBlobs: WaveFrontBlob[] = [];
-          for (let i = 0; i < blobsToSpawn; i++) {
-            newBlobs.push(createRandomBlob());
-          }
-          updatedBlobs = [...updatedBlobs, ...newBlobs];
-        }
-      } else {
-        // EQUILIBRIUM PHASE: Intensity controls spawn/death balance
-
-        // Determine spawn and death rates based on intensity
-        const isIntense = intensity >= INTENSITY_THRESHOLD;
-        const spawnRate = isIntense ? SPAWN_RATE_INTENSE : SPAWN_RATE_CALM;
-        const deathRate = isIntense ? DEATH_RATE_INTENSE : DEATH_RATE_CALM;
-
-        // Bass hits boost spawn rate temporarily
-        const bassBoost = features.bass > 0.5 ? 2 : 1;
-        const effectiveSpawnRate = spawnRate * bassBoost;
-
-        // Spawn new blobs (rate = blobs per second → interval = 1000/rate ms)
-        const spawnInterval = 1000 / effectiveSpawnRate;
-        if (elapsedRef.current - lastSpawnRef.current > spawnInterval) {
-          updatedBlobs.push(createRandomBlob());
-          lastSpawnRef.current = elapsedRef.current;
-        }
-
-        // Kill old blobs (shrink and remove oldest ones)
-        const deathInterval = 1000 / deathRate;
-        if (elapsedRef.current - lastDeathRef.current > deathInterval && updatedBlobs.length > 20) {
-          // Find oldest blob and mark for death (smallest blobs die first for visual smoothness)
-          const oldestIndex = updatedBlobs.reduce((oldest, blob, idx) =>
-            blob.age > updatedBlobs[oldest].age ? idx : oldest, 0);
-
-          // Remove the oldest blob
-          updatedBlobs.splice(oldestIndex, 1);
-          lastDeathRef.current = elapsedRef.current;
-        }
+      // Kill oldest blob (only if we have enough)
+      if (shouldKillOldest && updatedBlobs.length > 20) {
+        const oldestIndex = updatedBlobs.reduce((oldest, blob, idx) =>
+          blob.age > updatedBlobs[oldest].age ? idx : oldest, 0);
+        updatedBlobs.splice(oldestIndex, 1);
       }
 
       // Recycle blobs that have left the viewport
@@ -751,7 +764,7 @@ export function Blobulator() {
         )}
 
         <p style={styles.stats}>
-          {bpmNormalized < 0.3 ? '🌊' : bpmNormalized < 0.7 ? '🔥' : '💥'} {blobs.length} blobs
+          {bpmNormalized < 0.3 ? '🌊' : bpmNormalized < 0.7 ? '🔥' : '💥'} {blobs.length} blobs | {displayTime}s
         </p>
         {isListening && (
           <>
