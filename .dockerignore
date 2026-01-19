@@ -1,0 +1,25 @@
+# Dependencies
+node_modules/
+
+# Build output (we build inside Docker)
+dist/
+
+# Development files
+*.log
+.git/
+.gitignore
+.vscode/
+.idea/
+
+# Documentation
+*.md
+docs/
+
+# Test files
+*.test.*
+*.spec.*
+__tests__/
+
+# Environment files
+.env*
+!.env.example

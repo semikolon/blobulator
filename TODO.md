@@ -2,11 +2,10 @@
 
 ## Deployment
 
-- [ ] Configure Kamal to deploy to Dell Optiplex with dual domain support:
-  - `voidulator.fredrikbranstrom.se` → Blobulator app (Voidulator mode)
-  - `blobulator.fredrikbranstrom.se` → Blobulator app (Blobulator mode)
-  - Both domains should resolve to the same deployment
-  - Consider: URL-based mode switching (e.g., `?mode=voidulator`) or subdomain detection
+- [x] DNS: Update wildcard A record `*.fredrikbranstrom.se` → `213.164.219.201` (Dell Optiplex)
+- [x] Create `config/deploy.yml` with Kamal config (+ Dockerfile, nginx.conf, .dockerignore)
+- [ ] Run `kamal deploy` to register with kamal-proxy
+- [ ] Consider: URL-based mode switching (e.g., `?mode=voidulator`) or subdomain detection to auto-select mode
 
 ## Future Enhancements
 

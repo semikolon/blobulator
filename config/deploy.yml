@@ -1,0 +1,56 @@
+# Blobulator Kamal Deployment Configuration
+# Target: Dell Optiplex 7010 (blobulator.fredrikbranstrom.se, voidulator.fredrikbranstrom.se)
+# Architecture: nginx (SSL) → kamal-proxy → nginx container (static files)
+
+service: blobulator
+
+# Container image name
+image: blobulator
+
+# Deploy to Dell Optiplex
+servers:
+  web:
+    hosts:
+      - 213.164.219.201
+
+# Proxy configuration
+# SSL handled by external nginx on Dell
+proxy:
+  ssl: false
+  host: blobulator.fredrikbranstrom.se,voidulator.fredrikbranstrom.se
+  app_port: 80  # nginx inside container listens on 80
+  forward_headers: true
+
+# Local registry (same pattern as brf-auto)
+registry:
+  server: localhost:5555
+  username: "<%= ENV['KAMAL_REGISTRY_USERNAME'] %>"
+  password: "<%= ENV['KAMAL_REGISTRY_PASSWORD'] %>"
+
+# Builder configuration
+# Remote builder on Dell - native AMD64
+builder:
+  arch: amd64
+  remote: ssh://fredrik@213.164.219.201:2222
+  cache:
+    type: registry
+    options: mode=max
+
+# Environment variables (minimal - just timezone)
+env:
+  clear:
+    TZ: Europe/Stockholm
+
+# SSH configuration
+ssh:
+  user: fredrik
+  port: 2222
+
+# Rolling deploy
+boot:
+  limit: 1
+  wait: 5
+
+# Aliases
+aliases:
+  logs: app logs -f
