@@ -1,17 +1,17 @@
 /**
  * Blobulator - Audio-Reactive Metaball Visualization
  *
- * Unified intensity-based animation system:
- * - Behaviors blend smoothly on a 0-1 intensity scale (no binary mode switching)
- * - Low intensity: Calm ambient swirling with center gravity
- * - High intensity: Active wavefront expansion with faster spawning
- * - Center gravity always active, strength scales with intensity
+ * BPM-based animation system:
+ * - Animation style driven by detected BPM (slow BPM = calm, fast BPM = energetic)
+ * - Low BPM (<90): Calm ambient swirling with cool colors (purple/blue/teal)
+ * - High BPM (>140): Active expansion with warm colors (pink/orange)
+ * - BPM changes slowly = smooth color transitions (not jarring)
  *
  * Audio reactivity:
- * - Intensity (energy + derivative) drives all animation blending
- * - BPM detected for tempo-synced effects
- * - Bass affects spawn rate and hue warmth
- * - Treble shifts hue toward cooler tones
+ * - BPM drives color palette and animation style
+ * - Bass affects spawn rate
+ * - Amplitude affects blob size pulse
+ * - Mids affect movement speed
  */
 
 import { useState, useEffect, useRef, useCallback } from 'react';
@@ -20,11 +20,10 @@ import { DEFAULT_CONFIG } from './types';
 import {
   generateInitialBlobs,
   spawnFromFrontier,
-  updateBlobPosition,
   updateBlobVelocity,
   recycleBlobsAtEdge,
 } from './physics';
-import { applyDriftToBlobs, getSizeBreathingMultiplier } from './drift';
+import { getSizeBreathingMultiplier } from './drift';
 import { useAdaptiveAudio } from './useAdaptiveAudio';
 
 // 3 Cluster configurations - different sizes and speeds
@@ -55,19 +54,13 @@ const CLUSTER_HUE_RANGES_WARM = [
   { base: 25, spread: 30 },    // Cluster 2: Orange/coral
 ];
 
-// Cluster size pulsing configuration
-// Each cluster randomly grows or shrinks on its own schedule
-const PULSE_DURATION_MS = 1000;        // 1 second to complete pulse
-const PULSE_INTERVAL_MIN_MS = 3000;    // Minimum 3 seconds between pulses
-const PULSE_INTERVAL_MAX_MS = 6000;    // Maximum 6 seconds between pulses
-const PULSE_GROW_SCALE = 1.5;          // Grow to 150% size
-const PULSE_SHRINK_SCALE = 0.75;       // Shrink to 75% size
+// BPM normalization - maps BPM to 0-1 scale for smooth animation blending
+// Low BPM (60-90) = calm/cool, High BPM (140-180) = energetic/warm
+const BPM_MIN = 70;   // Below this = fully calm (0)
+const BPM_MAX = 150;  // Above this = fully energetic (1)
 
-interface ClusterPulseState {
-  targetScale: number;      // 1.0, 1.5, or 0.75
-  pulseStartTime: number;   // When current pulse started
-  nextPulseTime: number;    // When to trigger next pulse
-}
+// Note: Cluster pulsing constants removed (feature disabled)
+// Can be re-added from git history if needed
 
 // Get cluster index from blob ID (uses random part for even distribution)
 function getClusterIndex(blobId: string): number {
@@ -161,6 +154,7 @@ export function Blobulator() {
   const [blobs, setBlobs] = useState<WaveFrontBlob[]>([]);
   const [config] = useState<BlobFieldConfig>(DEFAULT_CONFIG);
   const [viewport, setViewport] = useState({ width: window.innerWidth, height: window.innerHeight });
+  const [isPaused, setIsPaused] = useState(false);
   const {
     isListening,
     error,
@@ -169,7 +163,6 @@ export function Blobulator() {
     bpm,
     bpmConfidence,
     adaptiveThreshold,
-    stats,
     startListening,
     stopListening,
   } = useAdaptiveAudio();
@@ -179,61 +172,11 @@ export function Blobulator() {
   const elapsedRef = useRef<number>(0);
   const lastFrameRef = useRef<number>(0);
 
-  // Cluster pulse state - each cluster pulses independently
-  const clusterPulsesRef = useRef<ClusterPulseState[]>([
-    { targetScale: 1.0, pulseStartTime: 0, nextPulseTime: 2000 },
-    { targetScale: 1.0, pulseStartTime: 0, nextPulseTime: 3500 },
-    { targetScale: 1.0, pulseStartTime: 0, nextPulseTime: 5000 },
-  ]);
+  // BPM normalized to 0-1 scale (changes slowly, good for color/style blending)
+  // Low BPM (70) = 0 (calm), High BPM (150) = 1 (energetic)
+  const bpmNormalized = Math.max(0, Math.min(1, (bpm - BPM_MIN) / (BPM_MAX - BPM_MIN)));
 
-  // Calculate current pulse multiplier for a cluster with smooth easing
-  const getClusterPulseMultiplier = useCallback((clusterIndex: number, elapsed: number): number => {
-    const pulse = clusterPulsesRef.current[clusterIndex];
-
-    // Check if it's time to start a new pulse
-    if (elapsed >= pulse.nextPulseTime && pulse.targetScale === 1.0) {
-      // Start new pulse - randomly grow or shrink
-      pulse.targetScale = Math.random() > 0.5 ? PULSE_GROW_SCALE : PULSE_SHRINK_SCALE;
-      pulse.pulseStartTime = elapsed;
-    }
-
-    // If not pulsing, return 1.0
-    if (pulse.targetScale === 1.0) {
-      return 1.0;
-    }
-
-    // Calculate pulse progress (0 to 1)
-    const pulseElapsed = elapsed - pulse.pulseStartTime;
-    const progress = Math.min(1, pulseElapsed / PULSE_DURATION_MS);
-
-    // Ease in-out for smooth animation
-    const easedProgress = progress < 0.5
-      ? 2 * progress * progress
-      : 1 - Math.pow(-2 * progress + 2, 2) / 2;
-
-    // Pulse goes: 1.0 → target → 1.0 (there and back)
-    let multiplier: number;
-    if (easedProgress < 0.5) {
-      // Going toward target
-      multiplier = 1.0 + (pulse.targetScale - 1.0) * (easedProgress * 2);
-    } else {
-      // Returning to normal
-      multiplier = pulse.targetScale + (1.0 - pulse.targetScale) * ((easedProgress - 0.5) * 2);
-    }
-
-    // Pulse complete - schedule next one
-    if (progress >= 1) {
-      pulse.targetScale = 1.0;
-      const randomInterval = PULSE_INTERVAL_MIN_MS +
-        Math.random() * (PULSE_INTERVAL_MAX_MS - PULSE_INTERVAL_MIN_MS);
-      pulse.nextPulseTime = elapsed + randomInterval;
-    }
-
-    return multiplier;
-  }, []);
-
-  // Intensity (0-1) drives all animation blending - no binary mode switching
-  // BPM detection provides tempo for future rhythm-synced effects
+  // Note: Cluster pulsing is DISABLED for now (constants preserved for future re-enabling)
 
   // Initialize blobs
   useEffect(() => {
@@ -251,8 +194,47 @@ export function Blobulator() {
     return () => window.removeEventListener('resize', handleResize);
   }, []);
 
-  // Animation loop - blends behaviors based on intensity (0-1)
+  // Auto-start microphone on load (or on first user interaction if browser blocks it)
+  useEffect(() => {
+    let mounted = true;
+
+    const tryStart = async () => {
+      try {
+        await startListening();
+      } catch {
+        // Browser blocked auto-start, wait for user interaction
+        const startOnClick = async () => {
+          if (mounted && !isListening) {
+            await startListening();
+          }
+          document.removeEventListener('click', startOnClick);
+        };
+        document.addEventListener('click', startOnClick, { once: true });
+      }
+    };
+
+    tryStart();
+
+    return () => {
+      mounted = false;
+    };
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Handle click on background to toggle pause
+  const handleBackgroundClick = useCallback(() => {
+    setIsPaused(prev => !prev);
+  }, []);
+
+  // Animation loop - FULLY SMOOTH blending of all behaviors across 0-1 BPM spectrum
+  // No hard mode switches - every behavior is always present, just scaled by bpmNormalized
   const animate = useCallback((timestamp: number) => {
+    // Skip animation updates when paused (but keep the loop running)
+    if (isPaused) {
+      lastFrameRef.current = timestamp; // Keep time reference updated
+      animationRef.current = requestAnimationFrame(animate);
+      return;
+    }
+
     const deltaMs = timestamp - lastFrameRef.current;
     lastFrameRef.current = timestamp;
     elapsedRef.current += deltaMs;
@@ -260,52 +242,103 @@ export function Blobulator() {
     setBlobs(currentBlobs => {
       let updatedBlobs = [...currentBlobs];
 
-      // ===== UNIFIED MOTION: Blend drift and expansion based on intensity =====
+      // ===== FULLY UNIFIED MOTION: All behaviors blend smoothly =====
+      // No thresholds, no mode switches - just continuous scaling
 
-      // 1. ALWAYS apply drift physics (swirling, direction wobble)
-      //    Strength scales inversely with intensity (stronger when calm)
-      const driftStrength = 1 - intensity * 0.7; // 1.0 at calm, 0.3 at max intensity
-      if (driftStrength > 0.1) {
-        updatedBlobs = applyDriftToBlobs(
-          updatedBlobs,
-          deltaMs * driftStrength,
+      // Blend factors based on INTENSITY (responsive to music energy)
+      // Intensity changes with the music = visible difference in animation style
+      const driftFactor = 1 - intensity * 0.8;           // 1.0 → 0.2 (mostly drift when quiet)
+      const expansionFactor = 0.05 + intensity * 0.95;   // 0.05 → 1.0 (mostly expansion when loud)
+      const midSpeedBoost = 1 + features.mid * 0.5;
+
+      // === AUDIO-DRIVEN CURL NOISE PARAMETERS ===
+      // These control the low-level "feel" of blob movement
+      // Mids → lerpFactor: higher mids = snappier response to flow field (less momentum)
+      // Treble → timeEvolution: higher treble = faster flow field changes (sparkly/energetic)
+      // Bass → scale: higher bass = broader sweeping curves (vs tight local swirls)
+      const dynamicConfig = {
+        ...config,
+        curlLerpFactor: 0.01 + features.mid * 0.07,      // 0.01 → 0.08 (snappier with mids)
+        curlTimeEvolution: 0.0001 + features.treble * 0.0009, // 0.0001 → 0.001 (faster with treble)
+        curlScale: 0.005 + (1 - features.bass) * 0.01,   // 0.005 → 0.015 (broader with bass)
+      };
+
+      // Process each blob with BOTH drift and expansion physics blended together
+      for (let i = 0; i < updatedBlobs.length; i++) {
+        const blob = updatedBlobs[i];
+        const cluster = CLUSTERS[getClusterIndex(blob.id)];
+        const phaseOffset = i * 0.7;
+
+        // === DRIFT-LIKE BEHAVIORS (scale with driftFactor) ===
+
+        // Direction wobble - each blob has oscillating direction
+        const directionWobble = Math.sin(elapsedRef.current * 0.0004 + phaseOffset * 2.3) * 0.7;
+        const wobbleInfluence = directionWobble * driftFactor * deltaMs * 0.001;
+        blob.direction += wobbleInfluence;
+
+        // Speed variation per blob - creates relative movement
+        const speedVariation = 1 + Math.sin(elapsedRef.current * 0.0003 + phaseOffset * 1.7) * 0.8 * driftFactor;
+
+        // Drift movement (swirling in place)
+        const driftSpeed = 0.018 * speedVariation * driftFactor;
+        const driftX = Math.cos(blob.direction) * driftSpeed * deltaMs;
+        const driftY = Math.sin(blob.direction) * driftSpeed * deltaMs;
+
+        // === EXPANSION-LIKE BEHAVIORS (scale with expansionFactor) ===
+
+        // Velocity updates - curl noise + generation-based acceleration
+        // Uses dynamicConfig with audio-driven curl parameters
+        updateBlobVelocity(
+          blob,
+          dynamicConfig,
           elapsedRef.current,
-          viewport.width,
-          viewport.height
+          0.8 * cluster.speedMultiplier * midSpeedBoost * expansionFactor
         );
+
+        // === COMBINE BOTH SYSTEMS ===
+        // Position = drift contribution + velocity contribution (both always present)
+        blob.x += driftX + blob.vx * expansionFactor;
+        blob.y += driftY + blob.vy * expansionFactor;
+        blob.age += 1;  // Age used for influence calculations
+
+        // Gradual direction evolution (swirling effect, always present)
+        const curlAngle = Math.sin(elapsedRef.current * 0.0002 + phaseOffset) * Math.PI * 0.15;
+        blob.direction += curlAngle * 0.0016 * deltaMs * driftFactor;
       }
 
-      // 2. ALWAYS apply expansion physics (velocity toward edge)
-      //    Strength scales with intensity
-      const expansionStrength = intensity;
-      if (expansionStrength > 0.1) {
-        // Mids affect speed - higher mids = faster movement
-        const midSpeedBoost = 1 + features.mid * 0.5;
+      // Center gravity - gentle pull, keeps blobs from dispersing too far
+      const centerGravityBase = 0.0000032;  // 2.5x reduction from 0.000008
+      const centerGravityBpmBoost = 0.000006;  // Scaled proportionally
+      const centerGravityStrength = centerGravityBase + bpmNormalized * centerGravityBpmBoost;
 
-        for (const blob of updatedBlobs) {
-          const cluster = CLUSTERS[getClusterIndex(blob.id)];
-          // Scale velocity update by intensity
-          updateBlobVelocity(
-            blob,
-            config,
-            elapsedRef.current,
-            0.8 * cluster.speedMultiplier * midSpeedBoost * expansionStrength
-          );
-          updateBlobPosition(blob);
-        }
-      }
-
-      // 3. ALWAYS apply center gravity - keeps blobs from dispersing too far
-      //    Stronger at HIGH intensity (creates "frenzy concentrated in middle")
-      const centerGravityBase = 0.00002;  // Gentle base pull
-      const centerGravityIntensityBoost = 0.00008;  // Additional pull at max intensity
-      const centerGravityStrength = centerGravityBase + intensity * centerGravityIntensityBoost;
+      const centerX = viewport.width / 2;
+      const centerY = viewport.height / 2;
 
       for (const blob of updatedBlobs) {
         const distFromCenter = Math.sqrt(blob.x * blob.x + blob.y * blob.y);
         if (distFromCenter > 30) {
           blob.x -= blob.x * centerGravityStrength * deltaMs;
           blob.y -= blob.y * centerGravityStrength * deltaMs;
+        }
+
+        // Viewport boundary containment - soft edges push blobs back
+        // Reduced margin lets blobs use more of the screen
+        const boundaryMargin = 100;  // Reduced from 200 - blobs can go closer to edges
+        const boundaryStrength = 0.00006 * (0.3 + driftFactor * 0.4); // Gentler push
+        const viewportX = blob.x + centerX;
+        const viewportY = blob.y + centerY;
+
+        if (viewportX < boundaryMargin) {
+          blob.x += (boundaryMargin - viewportX) * boundaryStrength * deltaMs;
+        }
+        if (viewportX > viewport.width - boundaryMargin) {
+          blob.x -= (viewportX - (viewport.width - boundaryMargin)) * boundaryStrength * deltaMs;
+        }
+        if (viewportY < boundaryMargin) {
+          blob.y += (boundaryMargin - viewportY) * boundaryStrength * deltaMs;
+        }
+        if (viewportY > viewport.height - boundaryMargin) {
+          blob.y -= (viewportY - (viewport.height - boundaryMargin)) * boundaryStrength * deltaMs;
         }
       }
 
@@ -346,12 +379,12 @@ export function Blobulator() {
         }
       }
 
-      // 5. Spawning - rate scales with intensity and bass
-      //    Even at low intensity, occasional spawning keeps things alive
+      // 5. Spawning - rate scales with BPM and bass
+      //    Even at low BPM, occasional spawning keeps things alive
       const baseSpawnInterval = config.spawnIntervalMs;
-      const intensitySpawnBoost = intensity * 400;  // Faster spawning at high intensity
+      const bpmSpawnBoost = bpmNormalized * 400;    // Faster spawning at high BPM
       const bassSpawnBoost = features.bass * 200;   // Bass hits trigger spawns
-      const spawnInterval = Math.max(150, baseSpawnInterval - intensitySpawnBoost - bassSpawnBoost);
+      const spawnInterval = Math.max(150, baseSpawnInterval - bpmSpawnBoost - bassSpawnBoost);
 
       if (elapsedRef.current - lastSpawnRef.current > spawnInterval) {
         const frontier = updatedBlobs.filter(b => b.isFrontier);
@@ -382,7 +415,7 @@ export function Blobulator() {
     });
 
     animationRef.current = requestAnimationFrame(animate);
-  }, [config, features, viewport, intensity]);
+  }, [config, features, viewport, intensity, isPaused]);
 
   // Start/stop animation
   useEffect(() => {
@@ -412,12 +445,13 @@ export function Blobulator() {
     // Mids create subtle per-blob wobble (different phase per blob)
     const midWobble = 1 + features.mid * 0.2 * Math.sin(elapsedRef.current * 0.003 + index * 0.5);
 
-    // Breathing effect - stronger at low intensity (calm state)
-    const breathingAmount = (1 - intensity) * getSizeBreathingMultiplier(elapsedRef.current, index);
-    const breathingMultiplier = 1 + (breathingAmount - 1) * (1 - intensity);
+    // Breathing effect - stronger at low BPM (calm state)
+    const breathingAmount = (1 - bpmNormalized) * getSizeBreathingMultiplier(elapsedRef.current, index);
+    const breathingMultiplier = 1 + (breathingAmount - 1) * (1 - bpmNormalized);
 
-    // Cluster-wide pulsing - each cluster grows/shrinks together every 3-6s
-    const clusterPulseMultiplier = getClusterPulseMultiplier(clusterIndex, elapsedRef.current);
+    // Cluster-wide pulsing - DISABLED for now
+    // const clusterPulseMultiplier = getClusterPulseMultiplier(clusterIndex, elapsedRef.current);
+    const clusterPulseMultiplier = 1.0;
 
     // Neighbor size influence - nearby larger blobs make this blob slightly larger
     let neighborSizeInfluence = 1.0;
@@ -456,17 +490,17 @@ export function Blobulator() {
   };
 
   // Calculate base HSL color for a blob (without neighbor blending)
-  // Color shifts based on intensity: cool (purple/blue/teal) → warm (pink/orange)
+  // Color shifts based on BPM: cool (purple/blue/teal) at low BPM → warm (pink/orange) at high BPM
   const getBlobBaseHSL = (blob: WaveFrontBlob): { h: number; s: number; l: number } => {
     const clusterIndex = getClusterIndex(blob.id);
     const coolRange = CLUSTER_HUE_RANGES_COOL[clusterIndex];
     const warmRange = CLUSTER_HUE_RANGES_WARM[clusterIndex];
 
-    // Interpolate between cool and warm hue ranges based on intensity
+    // Interpolate between cool and warm hue ranges based on BPM
     // Use easeInOut curve for smoother transitions
-    const easedIntensity = intensity < 0.5
-      ? 2 * intensity * intensity
-      : 1 - Math.pow(-2 * intensity + 2, 2) / 2;
+    const easedBpm = bpmNormalized < 0.5
+      ? 2 * bpmNormalized * bpmNormalized
+      : 1 - Math.pow(-2 * bpmNormalized + 2, 2) / 2;
 
     // Handle hue interpolation (wrapping around 360°)
     let coolBase = coolRange.base;
@@ -475,11 +509,11 @@ export function Blobulator() {
     if (warmBase < 60 && coolBase > 200) {
       warmBase += 360; // e.g., 25° → 385°
     }
-    const interpolatedBase = coolBase + (warmBase - coolBase) * easedIntensity;
+    const interpolatedBase = coolBase + (warmBase - coolBase) * easedBpm;
     const baseHue = ((interpolatedBase % 360) + 360) % 360;
 
     // Spread also interpolates
-    const spread = coolRange.spread + (warmRange.spread - coolRange.spread) * easedIntensity;
+    const spread = coolRange.spread + (warmRange.spread - coolRange.spread) * easedBpm;
 
     // Per-blob variation within cluster's spread
     const blobHueVariation = (blob.colorIndex % 5) * (spread / 5);
@@ -488,10 +522,10 @@ export function Blobulator() {
     const audioHueShift = (features.bass - features.treble) * 20;
     const hue = ((baseHue + blobHueVariation + audioHueShift) % 360 + 360) % 360;
 
-    // Saturation and lightness increase with intensity for that neon pop
-    const baseSaturation = 70 + intensity * 20;  // 70% calm → 90% intense
+    // Saturation and lightness increase with BPM for that neon pop
+    const baseSaturation = 70 + bpmNormalized * 20;  // 70% at low BPM → 90% at high BPM
     const saturation = baseSaturation + features.amplitude * 10;
-    const lightness = 50 + intensity * 10 + features.amplitude * 10;  // 50-70%
+    const lightness = 50 + bpmNormalized * 10 + features.amplitude * 10;  // 50-70%
 
     return { h: hue, s: Math.min(100, saturation), l: Math.min(75, lightness) };
   };
@@ -563,16 +597,16 @@ export function Blobulator() {
   const centerX = viewport.width / 2;
   const centerY = viewport.height / 2;
 
-  // Dynamic background color based on intensity
+  // Dynamic background color based on BPM
   // Interpolate between calm purple tint and energetic dark
-  const bgLightness = 10 + intensity * 4;  // 10% at calm, 14% at max
-  const bgSaturation = 20 - intensity * 15; // 20% purple at calm, 5% at max
+  const bgLightness = 10 + bpmNormalized * 4;  // 10% at low BPM, 14% at high BPM
+  const bgSaturation = 20 - bpmNormalized * 15; // 20% purple at low BPM, 5% at high BPM
   const backgroundColor = `hsl(270, ${bgSaturation}%, ${bgLightness}%)`;
 
   return (
-    <div style={{ ...styles.container, backgroundColor }}>
-      {/* Control Panel */}
-      <div style={styles.controlPanel}>
+    <div style={{ ...styles.container, backgroundColor }} onClick={handleBackgroundClick}>
+      {/* Control Panel - stop propagation so clicks here don't toggle pause */}
+      <div style={styles.controlPanel} onClick={(e) => e.stopPropagation()}>
         <h1 style={styles.title}>Blobulator</h1>
 
         {error && <p style={styles.error}>{error}</p>}
@@ -613,15 +647,15 @@ export function Blobulator() {
         )}
 
         <p style={styles.stats}>
-          {intensity < 0.3 ? '🌊' : intensity < 0.7 ? '🔥' : '💥'} {blobs.length} blobs
+          {bpmNormalized < 0.3 ? '🌊' : bpmNormalized < 0.7 ? '🔥' : '💥'} {blobs.length} blobs
         </p>
         {isListening && (
           <>
             <p style={{ ...styles.stats, fontSize: 10, marginTop: 4 }}>
-              Intensity: {(intensity * 100).toFixed(0)}% | BPM: {bpm} {bpmConfidence > 0.5 ? '✓' : '~'}
+              BPM: {bpm} {bpmConfidence > 0.5 ? '✓' : '~'} | Style: {(bpmNormalized * 100).toFixed(0)}%
             </p>
             <p style={{ ...styles.stats, fontSize: 10, marginTop: 2 }}>
-              Thresh: {adaptiveThreshold.toFixed(3)} | Mean: {stats.mean.toFixed(3)}
+              Intensity: {(intensity * 100).toFixed(0)}% | Thresh: {adaptiveThreshold.toFixed(3)}
             </p>
           </>
         )}
