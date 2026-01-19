@@ -365,9 +365,9 @@ Three loops iterate ALL blobs against ALL blobs every frame:
 
 **Impact**: At 350 blobs = 350² × 3 = **367,500 distance calculations per frame**.
 
-### Solution: Spatial Hashing (In Progress)
+### Solution: Spatial Hashing (Implemented)
 
-Divide viewport into 100px grid cells. Only check blobs in same + adjacent cells (9 cells max).
+Viewport divided into 100px grid cells. All three neighbor loops now use spatial hash - only check blobs in same + adjacent cells (9 cells max).
 
 ```typescript
 class SpatialHash {
@@ -376,7 +376,12 @@ class SpatialHash {
 }
 ```
 
-**Expected improvement**: 122,500 checks → ~2,000 checks per loop (50-60x reduction).
+**Achieved improvement**: 122,500 checks → ~2,000 checks per loop (50-60x reduction).
+
+**Implementation notes**:
+- Hash rebuilt twice per frame: once before direction influence, once after spawn/death for render
+- Render functions (`getDisplaySize`, `getDynamicColor`) check hash freshness before using
+- Cell size (100px) >= influence radius (80px) ensures correct neighbor detection
 
 ### Other Performance Notes
 

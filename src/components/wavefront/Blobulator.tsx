@@ -296,6 +296,11 @@ export function Blobulator({ audio }: BlobulatorProps) {
   const targetGravityCentersRef = useRef<Array<{ x: number; y: number; strength: number }>>([]);
   const lastGravityUpdateRef = useRef<number>(0);
 
+  // Spatial hash for O(n) neighbor lookups - rebuilt each frame
+  const spatialHashRef = useRef<SpatialHash>(new SpatialHash(SPATIAL_HASH_CELL_SIZE));
+  // Track which blob array the hash was built from (to avoid redundant rebuilds in render)
+  const spatialHashBlobsRef = useRef<WaveFrontBlob[] | null>(null);
+
   // Display time (updated once per second to avoid excessive re-renders)
   const [displayTime, setDisplayTime] = useState(0);
 
@@ -471,6 +476,10 @@ export function Blobulator({ audio }: BlobulatorProps) {
 
     setBlobs(currentBlobs => {
       let updatedBlobs = [...currentBlobs];
+
+      // Rebuild spatial hash for O(n) neighbor lookups this frame
+      // Note: We rebuild again at end of frame after spawn/death for render functions
+      spatialHashRef.current.rebuild(updatedBlobs);
 
       // ===== FULLY UNIFIED MOTION: All behaviors blend smoothly =====
       // No thresholds, no mode switches - just continuous scaling
@@ -656,6 +665,7 @@ export function Blobulator({ audio }: BlobulatorProps) {
 
       // 4. Blob-to-blob direction influence - nearby blobs align velocities
       //    Similar to flocking behavior, creates more organic flow
+      //    Uses spatial hash for O(n) lookups instead of O(n²)
       for (let i = 0; i < updatedBlobs.length; i++) {
         const blob = updatedBlobs[i];
         if (blob.age < INFLUENCE_MIN_AGE) continue;
@@ -664,7 +674,9 @@ export function Blobulator({ audio }: BlobulatorProps) {
         let avgVy = 0;
         let neighborCount = 0;
 
-        for (let j = 0; j < updatedBlobs.length; j++) {
+        // Only check blobs in nearby cells (9 cells max)
+        const neighborIndices = spatialHashRef.current.getNeighborIndices(blob.x, blob.y);
+        for (const j of neighborIndices) {
           if (i === j) continue;
           const other = updatedBlobs[j];
           if (other.age < INFLUENCE_MIN_AGE) continue;
@@ -729,6 +741,10 @@ export function Blobulator({ audio }: BlobulatorProps) {
       // Update population ref for soft cap calculation next frame
       populationRef.current = updatedBlobs.length;
 
+      // Final rebuild of spatial hash after all modifications (for render functions)
+      spatialHashRef.current.rebuild(updatedBlobs);
+      spatialHashBlobsRef.current = updatedBlobs;
+
       return updatedBlobs;
     });
 
@@ -777,12 +793,21 @@ export function Blobulator({ audio }: BlobulatorProps) {
     const clusterPulseMultiplier = 1.0;
 
     // Neighbor size influence - nearby larger blobs make this blob slightly larger
+    // Uses spatial hash for O(n) lookups instead of O(n²)
     let neighborSizeInfluence = 1.0;
     if (blob.age >= INFLUENCE_MIN_AGE) {
+      // Ensure spatial hash is current for this render pass
+      if (spatialHashBlobsRef.current !== blobs) {
+        spatialHashRef.current.rebuild(blobs);
+        spatialHashBlobsRef.current = blobs;
+      }
+
       let totalInfluence = 0;
       let totalWeight = 0;
 
-      for (let i = 0; i < blobs.length; i++) {
+      // Only check blobs in nearby cells (9 cells max)
+      const neighborIndices = spatialHashRef.current.getNeighborIndices(blob.x, blob.y);
+      for (const i of neighborIndices) {
         if (i === index) continue;
         const other = blobs[i];
         if (other.age < INFLUENCE_MIN_AGE) continue;
@@ -882,6 +907,7 @@ export function Blobulator({ audio }: BlobulatorProps) {
   };
 
   // Dynamic color with neighbor blending - blobs become more similar when close
+  // Uses spatial hash for O(n) lookups instead of O(n²)
   const getDynamicColor = (blob: WaveFrontBlob, index: number) => {
     const baseColor = getBlobBaseHSL(blob);
 
@@ -890,13 +916,21 @@ export function Blobulator({ audio }: BlobulatorProps) {
       return `hsl(${baseColor.h}, ${baseColor.s}%, ${baseColor.l}%)`;
     }
 
+    // Ensure spatial hash is current for this render pass
+    if (spatialHashBlobsRef.current !== blobs) {
+      spatialHashRef.current.rebuild(blobs);
+      spatialHashBlobsRef.current = blobs;
+    }
+
     // Find nearby blobs and calculate weighted color influence
     let totalWeight = 0;
     let weightedHue = 0;
     let weightedSat = 0;
     let weightedLight = 0;
 
-    for (let i = 0; i < blobs.length; i++) {
+    // Only check blobs in nearby cells (9 cells max)
+    const neighborIndices = spatialHashRef.current.getNeighborIndices(blob.x, blob.y);
+    for (const i of neighborIndices) {
       if (i === index) continue; // Skip self
 
       const other = blobs[i];
