@@ -75,6 +75,8 @@ function createCoreBlob(x: number, y: number, config: BlobFieldConfig): WaveFron
     age: 0,
     isFrontier: false,
     colorIndex: Math.floor(Math.random() * BLOB_COLORS.length),
+    lifecycle: 0,  // Start at 0, lerps to 1 for smooth spawn
+    dying: false,
   };
 }
 
@@ -142,6 +144,8 @@ export function spawnFromFrontier(
         age: 0,
         isFrontier: true,
         colorIndex: parent.colorIndex,
+        lifecycle: 0,  // Start at 0, lerps to 1 for smooth spawn
+        dying: false,
       });
     }
 

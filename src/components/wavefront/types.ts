@@ -15,6 +15,11 @@ export interface WaveFrontBlob {
   age: number;
   isFrontier: boolean;
   colorIndex: number;
+  // Lifecycle: 0 = just spawned, lerps to 1; when dying, lerps back to 0
+  // Used as size multiplier for smooth spawn/death transitions
+  lifecycle: number;
+  // True when blob is fading out (lifecycle lerping toward 0)
+  dying: boolean;
 }
 
 export interface BlobFieldConfig {
