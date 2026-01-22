@@ -139,42 +139,42 @@ interface VoidState {
 }
 
 function createDefaultState(): VoidState {
-  // "Spectacular glow" preset as default
-  const beamCount = 8;
+  // Visually rich default - 17 beams, wide spread, 2 emitters
+  const beamCount = 17;
   return {
     seed: (Math.random() * 1e9) | 0,
     isCircle: true,
     circle: { cx: 0, cy: 0, R: 0 },
     vertices: [],
-    reflectivity: 0.95,
+    reflectivity: 0.98,
     maxBounces: 80,
-    beamWidth: 1.2,
+    beamWidth: 0.8,
     beamCount,
-    spreadDeg: 25,
+    spreadDeg: 125,
     angleDeg: 0,
     rotationSpeed: 1.8,
-    speedMultiplier: 1,
-    emitters: [{ x: 0, y: 0 }],
-    beamPalette: Array.from({ length: beamCount }, (_, i) => ({ h: (i * 360) / beamCount, s: 80, l: 55 })),
-    perBeamSpeed: [2, 3, 5, 7, 11, 13, 17, 19],
+    speedMultiplier: 1.73,
+    emitters: [{ x: 0, y: 0 }, { x: 0, y: 0 }],  // 2 emitters, will be positioned by buildShape
+    beamPalette: Array.from({ length: beamCount }, (_, i) => ({ h: (i * 360) / beamCount, s: 85, l: 50 })),
+    perBeamSpeed: [2, 3, 5, 7, 11, 13, 17, 19, 23, 29, 31, 37, 41, 43, 47, 53, 59],
     perBeamPhase: new Array(beamCount).fill(0),
-    pulseOn: true,
+    pulseOn: false,
     pulseShape: 'sine',
     pulseAmp: 0.8,
     pulseFreqCP100: 2,
     pulseSpeed: 180,
     pulseSoft: 0.15,
-    glowLayers: 3,
-    glowIntensity: 2.5,
-    glowSpread: 4,
-    glowCore: 1.8,
+    glowLayers: 1,
+    glowIntensity: 1.5,
+    glowSpread: 3,
+    glowCore: 1.0,
     glowBlend: 'add',
     audioGlowBoost: 0,
   };
 }
 
 export function Voidulator({ audio }: VoidulatorProps) {
-  const { features } = audio;
+  const { features, bpm } = audio;
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const stateRef = useRef<VoidState>(createDefaultState());
   const glRef = useRef<WebGL2RenderingContext | null>(null);
@@ -195,7 +195,10 @@ export function Voidulator({ audio }: VoidulatorProps) {
   useEffect(() => {
     // Bass drives glow intensity boost (up to +50%)
     stateRef.current.audioGlowBoost = features.bass * 0.5;
-  }, [features.bass]);
+    // BPM drives rotation speed: 60 BPM → 0.8, 120 BPM → 1.5, 180 BPM → 2.5
+    const bpmNormalized = Math.max(0, Math.min(1, (bpm - 60) / 120));
+    stateRef.current.rotationSpeed = 0.8 + bpmNormalized * 1.7;
+  }, [features.bass, bpm]);
 
   // Ray-circle intersection
   const firstHitCircle = useCallback((o: { x: number; y: number }, d: { x: number; y: number }, c: { cx: number; cy: number; R: number }) => {
@@ -280,11 +283,16 @@ export function Voidulator({ audio }: VoidulatorProps) {
   const buildShape = useCallback((width: number, height: number) => {
     const S = stateRef.current;
     const cx = width / 2, cy = height / 2, margin = 16;
+    const R = Math.min(width, height) / 2 - margin;
     S.isCircle = true;
-    S.circle = { cx, cy, R: Math.min(width, height) / 2 - margin };
+    S.circle = { cx, cy, R };
     S.vertices = [];
-    // Center emitter
-    S.emitters = [{ x: cx, y: cy }];
+    // Position emitters - offset from center for interesting patterns
+    const emitterOffset = R * 0.15;
+    S.emitters = [
+      { x: cx - emitterOffset, y: cy },
+      { x: cx + emitterOffset, y: cy },
+    ];
   }, []);
 
   // Push quad to vertex array
