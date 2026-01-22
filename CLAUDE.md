@@ -8,7 +8,7 @@ Audio-reactive metaball visualization engine with wavefront expansion animation,
 
 **Working visualization** with unified intensity-based animation, BPM detection, and 6 enhancement phases complete.
 
-### v3 - Population & Physics Polish (January 19, 2026)
+### v3 - Population & Physics Polish (January 19-22, 2026)
 
 Smooth dynamics and dual-mode architecture:
 
@@ -16,8 +16,9 @@ Smooth dynamics and dual-mode architecture:
 2. **Dynamic Gravity Centers** - Blobs congregate around detected density clusters; centers lerp smoothly toward targets (0.03/frame) to prevent jerky rearrangement
 3. **Voidulator Mode** - App.tsx lifted audio to shared hook; ModeSwitcher toggles between Blobulator and Voidulator visualizations
 4. **Energy Metric** - `bpmNormalized * 0.4 + inertiaIntensity * 0.6` drives cluster-specific effects (Cluster 0 speed boost, Cluster 2 size boost)
+5. **Smooth Blob Lifecycle** (Jan 22) - Fixed animation jerkiness via lifecycle-scaled neighbor influence + SVG circle recycling. See "Smooth Blob Lifecycle System" section below.
 
-**Debug feature**: White dots with dark stroke show gravity center positions (up to 3).
+**Debug features**: White dots show gravity center positions; colored flash indicators correlate code events to visual effects (toggle via `DEBUG_FLASH_ENABLED`).
 
 ### v2 - Intensity-Based System (January 18, 2026)
 
@@ -388,3 +389,77 @@ class SpatialHash {
 - **SVG `feGaussianBlur`**: CPU-heavy in Safari; Firefox 132+ has WebRender GPU acceleration
 - **Frame-skipping**: Could run neighbor influence every 2-3 frames (imperceptible at 60fps)
 - **React optimization**: Already using refs for animation state (avoids re-render overhead)
+
+---
+
+## Smooth Blob Lifecycle System (January 22, 2026)
+
+### The Jerkiness Bug: Root Cause Discovery
+
+**Symptom**: Jarring visual "jumps" even after implementing lifecycle fade (blobs spawning at 0 size and dying by shrinking to 0).
+
+**Discovery process**: Added debug flash indicators (colored dots at top center) that light up when specific events fire. Human pattern recognition correlated magenta flashes (`deathRemoved` - when blobs are actually filtered from array) with visual jerks.
+
+**Key insight**: The jerk wasn't from the dying blob's SIZE change (that was smooth). It was from **surviving blobs suddenly losing a neighbor's influence**. When a blob is removed from the array, all blobs within 80px of it instantly recalculate their color/size/direction without that neighbor - causing visible discontinuity.
+
+### Fix 1: Lifecycle-Scaled Influence
+
+**Solution**: Dying blobs gradually reduce their influence on neighbors as they fade out. All three neighbor influence calculations now multiply weight by `other.lifecycle`:
+
+```typescript
+// Weight = distance falloff × lifecycle (0→1 for spawning, 1→0 for dying)
+const weight = distanceWeight * other.lifecycle;
+```
+
+**Affected systems**:
+1. **Color blending** (`getDynamicColor`) - dying blobs fade out of color average
+2. **Size influence** (`getDisplaySize`) - dying blobs fade out of size calculations
+3. **Direction influence** (animation loop) - dying blobs fade out of velocity alignment
+
+### Fix 2: SVG Circle Recycling (DOM Stability)
+
+**Discovery**: Even after lifecycle-scaled influence, significant jerkiness remained. The SVG gooey filter (`feGaussianBlur` + `feColorMatrix`) processes ALL circles together. When a circle is **removed from the DOM**, the entire filter recalculates, causing visible jumps regardless of the removed circle's size.
+
+**Solution**: Never change the SVG circle count.
+1. Dead blobs are NOT removed from the array
+2. Dead blobs render with `r=0` (zero area, no filter contribution)
+3. Dead blobs get **recycled** as new spawns (reset position, lifecycle=0, dying=false)
+4. Circle count stays constant → no filter recalculation → smooth animation
+
+```typescript
+// In render: truly dead blobs get r=0 but stay in DOM
+const isTrulyDead = blob.dying && blob.lifecycle <= LIFECYCLE_REMOVE_THRESHOLD;
+r={isTrulyDead ? 0 : getDisplaySize(blob, index)}
+
+// In spawn logic: recycle dead blobs instead of creating new ones
+for (const deadBlob of deadBlobs) {
+  deadBlob.x = newRandomX;
+  deadBlob.lifecycle = 0;
+  deadBlob.dying = false;
+  // ... reset other properties
+}
+```
+
+**Result**: Significantly reduced jerkiness. The combination of lifecycle-scaled influence (smooth neighbor transitions) + DOM stability (no filter recalculation) produces fluid animation.
+
+**Additionally**: `LIFECYCLE_REMOVE_THRESHOLD` lowered from 0.02 to 0.005 (blobs nearly invisible before going to r=0).
+
+### Debug Flash Indicators
+
+Visual debugging tool for correlating code events with visual effects. Enable/disable via `DEBUG_FLASH_ENABLED` constant.
+
+| Color | Event | Meaning |
+|-------|-------|---------|
+| 🟢 Green | `spawn` | New blob created (or recycled from dead pool) |
+| 🔴 Red | `deathMarked` | Blob marked as dying (starts fade-out) |
+| 🟣 Magenta | `deathRemoved` | Blob entered "truly dead" state (r=0, awaiting recycling) |
+| 🟡 Yellow | `edgeRecycle` | Blob hit viewport edge, marked dying |
+| 🟠 Orange | `hardCapCull` | Emergency population cull |
+| 🩵 Cyan | `emergencyReseed` | Population too low, reseeding |
+| 🔵 Light Blue | `gravityRecalc` | Gravity centers recalculated |
+
+**Pattern**: Fixed-position slots (7 dots, always same order) so human eye can track patterns. Dots show faint border when inactive, light up with glow when active (150ms duration).
+
+### Debug Toggle: Dynamic Gravity
+
+`ENABLE_DYNAMIC_GRAVITY = false` disables cluster-based gravity centers (uses only fixed center pull). Useful for isolating jerkiness causes - proved that dynamic gravity wasn't the culprit in this case.
