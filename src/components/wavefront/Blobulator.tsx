@@ -775,10 +775,8 @@ export function Blobulator({ audio }: BlobulatorProps) {
         }
       }
 
-      // EXPERIMENT: Don't remove dead blobs - mark them for recycling instead
-      // The SVG gooey filter recalculates when circles are removed from DOM,
-      // causing visible "jumps" regardless of blob size. By keeping blob count
-      // constant and recycling dead blobs as new spawns, we avoid DOM changes.
+      // Collect ALL truly dead blobs (dying + lifecycle exhausted)
+      // These will be recycled immediately to prevent accumulation
       const deadBlobs: WaveFrontBlob[] = [];
       for (const blob of updatedBlobs) {
         if (blob.dying && blob.lifecycle <= LIFECYCLE_REMOVE_THRESHOLD) {
@@ -787,44 +785,39 @@ export function Blobulator({ audio }: BlobulatorProps) {
       }
       const removedCount = deadBlobs.length; // For debug flash tracking
 
-      // Instead of filtering out dead blobs, mark them as "ready to recycle"
-      // They'll be reused in spawn logic below instead of creating new blobs
+      // ===== RECYCLE ALL DEAD BLOBS IMMEDIATELY =====
+      // Don't wait for spawn requests - recycle dead blobs right away to prevent
+      // invisible blobs from accumulating and wasting processing power.
+      // This keeps SVG circle count stable while maintaining efficient pool.
+      const padding = 100;
+      const maxX = (viewport.width / 2) - padding;
+      const maxY = (viewport.height / 2) - padding;
+
+      for (const deadBlob of deadBlobs) {
+        deadBlob.x = (Math.random() - 0.5) * 2 * maxX;
+        deadBlob.y = (Math.random() - 0.5) * 2 * maxY;
+        deadBlob.vx = (Math.random() - 0.5) * 0.5;
+        deadBlob.vy = (Math.random() - 0.5) * 0.5;
+        deadBlob.direction = Math.random() * Math.PI * 2;
+        deadBlob.size = config.baseBlobSize * (0.8 + Math.random() * 0.4);
+        deadBlob.age = 0;
+        deadBlob.colorIndex = Math.floor(Math.random() * 5);
+        deadBlob.lifecycle = 0;  // Start fading in
+        deadBlob.dying = false;  // No longer dying
+        deadBlob.isFrontier = true;
+      }
 
       // ===== APPLY SPAWN/DEATH (pure state transformation using pre-calculated values) =====
       // spawnCount and shouldKillOldest were calculated outside setBlobs to avoid Strict Mode issues
 
-      // Spawn new blobs by RECYCLING dead blobs first, then creating new if needed
-      // This keeps SVG circle count stable, avoiding gooey filter recalculation jumps
-      let didSpawn = false;
-      if (spawnCount > 0) {
+      // Track spawn event (recycled blobs count as spawns visually)
+      let didSpawn = deadBlobs.length > 0;
+
+      // Only create truly NEW blobs during seeding phase
+      // After seeding, population is maintained by recycling dead blobs
+      if (spawnCount > 0 && isSeeding) {
         didSpawn = true;
-        let recycledCount = 0;
-
-        // First, recycle dead blobs
-        for (let i = 0; i < spawnCount && recycledCount < deadBlobs.length; i++) {
-          const deadBlob = deadBlobs[recycledCount];
-          // Reset the dead blob to act as a new spawn
-          const padding = 100;
-          const maxX = (viewport.width / 2) - padding;
-          const maxY = (viewport.height / 2) - padding;
-
-          deadBlob.x = (Math.random() - 0.5) * 2 * maxX;
-          deadBlob.y = (Math.random() - 0.5) * 2 * maxY;
-          deadBlob.vx = (Math.random() - 0.5) * 0.5;
-          deadBlob.vy = (Math.random() - 0.5) * 0.5;
-          deadBlob.direction = Math.random() * Math.PI * 2;
-          deadBlob.size = config.baseBlobSize * (0.8 + Math.random() * 0.4);
-          deadBlob.age = 0;
-          deadBlob.colorIndex = Math.floor(Math.random() * 5);
-          deadBlob.lifecycle = 0;  // Start fading in
-          deadBlob.dying = false;  // No longer dying
-          deadBlob.isFrontier = true;
-
-          recycledCount++;
-        }
-
-        // If we need more spawns than dead blobs available, create new ones
-        for (let i = recycledCount; i < spawnCount; i++) {
+        for (let i = 0; i < spawnCount; i++) {
           updatedBlobs.push(createRandomBlob());
         }
       }
@@ -1239,7 +1232,7 @@ export function Blobulator({ audio }: BlobulatorProps) {
         )}
 
         <p style={styles.stats}>
-          {bpmNormalized < 0.3 ? '🌊' : bpmNormalized < 0.7 ? '🔥' : '💥'} {blobs.length} blobs | {displayTime}s
+          {bpmNormalized < 0.3 ? '🌊' : bpmNormalized < 0.7 ? '🔥' : '💥'} {blobs.filter(b => !b.dying || b.lifecycle > LIFECYCLE_REMOVE_THRESHOLD).length} blobs | {displayTime}s
         </p>
         {isListening && (
           <>
