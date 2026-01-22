@@ -17,10 +17,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import type { WaveFrontBlob, BlobFieldConfig } from './types';
 import { DEFAULT_CONFIG } from './types';
-import {
-  updateBlobVelocity,
-  recycleBlobsAtEdge,
-} from './physics';
+import { updateBlobVelocity } from './physics';
 import { getSizeBreathingMultiplier } from './drift';
 import type { AdaptiveAudioResult } from '../../shared';
 
@@ -84,7 +81,14 @@ const SOFT_CAP_MAX = 350;             // Maximum comfortable population
 const HARD_CAP_LIMIT = 400;           // Emergency cull threshold
 const HARD_CAP_TARGET = 350;          // Cull down to this
 
+// Blob lifecycle configuration - smooth spawn/death transitions
+const LIFECYCLE_FADE_RATE = 0.003;    // Rate per ms: 0→1 in ~333ms (3/sec)
+const LIFECYCLE_REMOVE_THRESHOLD = 0.005; // Remove blob when lifecycle drops below this (nearly invisible)
+
 // Dynamic gravity centers - form where blobs congregate
+// Set to false to use only fixed center gravity (for debugging jerkiness)
+const ENABLE_DYNAMIC_GRAVITY = false;  // TODO: Set back to true after testing
+
 const MAX_GRAVITY_CENTERS = 3;        // Maximum active gravity wells
 const GRAVITY_CENTER_RADIUS = 150;    // Radius to detect blob clusters
 const GRAVITY_CENTER_MIN_BLOBS = 8;   // Min blobs to form a gravity center
@@ -92,11 +96,29 @@ const GRAVITY_CENTER_STRENGTH = 0.000025;  // Pull strength per center
 const GRAVITY_CENTER_UPDATE_MS = 500; // How often to recalculate target centers
 const GRAVITY_CENTER_LERP = 0.03;     // Smoothing factor: 0.03 = ~1s to reach target (smooth)
 const GRAVITY_CENTER_FADE_THRESHOLD = 0.000001; // Remove centers when strength falls below this
-const FIXED_CENTER_GRAVITY = 0.000001; // Much weaker fixed center (was 0.000008)
+const FIXED_CENTER_GRAVITY = 0.000008; // Fixed center pull (stronger when dynamic is off)
 
 // Spatial hash configuration for O(n) neighbor lookups instead of O(n²)
 const SPATIAL_HASH_CELL_SIZE = 100;   // Must be >= BLOB_INFLUENCE_RADIUS (80px)
 const SPATIAL_HASH_MIN_BLOBS = 50;    // Below this, O(n²) is faster than hash overhead
+
+// Debug flash indicators - visual debugging for correlating jerks to code events
+const DEBUG_FLASH_ENABLED = true;     // Set to false to hide debug indicators
+const DEBUG_FLASH_DURATION_MS = 150;  // How long each flash lasts
+const DEBUG_FLASH_SIZE = 40;          // Dot diameter in pixels
+
+// Event types and their colors for visual debugging
+const DEBUG_EVENTS = {
+  spawn: '#00ff00',           // Green - new blob spawned
+  deathMarked: '#ff0000',     // Red - blob marked as dying
+  deathRemoved: '#ff00ff',    // Magenta - blob actually removed (lifecycle ended)
+  edgeRecycle: '#ffff00',     // Yellow - blob hit viewport edge
+  hardCapCull: '#ff8800',     // Orange - hard cap emergency cull
+  emergencyReseed: '#00ffff', // Cyan - emergency re-seed (low population)
+  gravityRecalc: '#8888ff',   // Light blue - gravity centers recalculated
+} as const;
+
+type DebugEventType = keyof typeof DEBUG_EVENTS;
 
 /**
  * Spatial Hash Grid - enables O(n) neighbor lookups instead of O(n²)
@@ -255,6 +277,8 @@ function createBlob(baseBlobSize: number): WaveFrontBlob {
     age: 0,
     isFrontier: true,
     colorIndex: Math.floor(Math.random() * 5),
+    lifecycle: 0,  // Start at 0, lerps to 1 for smooth spawn
+    dying: false,
   };
 }
 
@@ -303,6 +327,19 @@ export function Blobulator({ audio }: BlobulatorProps) {
   // Track which blob array the hash was built from (to avoid redundant rebuilds in render)
   const spatialHashBlobsRef = useRef<WaveFrontBlob[] | null>(null);
 
+  // Debug flash indicators - track when each event type last fired
+  const debugFlashRef = useRef<Record<DebugEventType, number>>({
+    spawn: 0,
+    deathMarked: 0,
+    deathRemoved: 0,
+    edgeRecycle: 0,
+    hardCapCull: 0,
+    emergencyReseed: 0,
+    gravityRecalc: 0,
+  });
+  // Force re-render when flashes change (for visual update) - not actively used but kept for potential future use
+  const [debugFlashTrigger] = useState(0);
+
   // Display time (updated once per second to avoid excessive re-renders)
   const [displayTime, setDisplayTime] = useState(0);
 
@@ -333,6 +370,8 @@ export function Blobulator({ audio }: BlobulatorProps) {
       age: 0,
       isFrontier: true,
       colorIndex: Math.floor(Math.random() * 5),
+      lifecycle: 0,  // Start at 0, lerps to 1 for smooth spawn
+      dying: false,
     };
   }, [config.baseBlobSize, viewport.width, viewport.height]);
 
@@ -553,100 +592,107 @@ export function Blobulator({ audio }: BlobulatorProps) {
       }
 
       // === DYNAMIC GRAVITY CENTERS ===
-      // Periodically detect clusters and update TARGET gravity centers
-      const now = performance.now();
-      if (now - lastGravityUpdateRef.current > GRAVITY_CENTER_UPDATE_MS) {
-        lastGravityUpdateRef.current = now;
+      // When enabled, periodically detect clusters and update gravity centers
+      // When disabled, only use fixed center gravity (for debugging)
+      if (ENABLE_DYNAMIC_GRAVITY) {
+        // Periodically detect clusters and update TARGET gravity centers
+        const now = performance.now();
+        if (now - lastGravityUpdateRef.current > GRAVITY_CENTER_UPDATE_MS) {
+          lastGravityUpdateRef.current = now;
+          if (DEBUG_FLASH_ENABLED) debugFlashRef.current.gravityRecalc = now;
 
-        // Find blob clusters using simple grid-based density detection
-        const cellSize = GRAVITY_CENTER_RADIUS;
-        const densityMap = new Map<string, { x: number; y: number; count: number; sumX: number; sumY: number }>();
+          // Find blob clusters using simple grid-based density detection
+          const cellSize = GRAVITY_CENTER_RADIUS;
+          const densityMap = new Map<string, { x: number; y: number; count: number; sumX: number; sumY: number }>();
 
-        for (const blob of updatedBlobs) {
-          const cellX = Math.floor(blob.x / cellSize);
-          const cellY = Math.floor(blob.y / cellSize);
-          const key = `${cellX},${cellY}`;
+          for (const blob of updatedBlobs) {
+            const cellX = Math.floor(blob.x / cellSize);
+            const cellY = Math.floor(blob.y / cellSize);
+            const key = `${cellX},${cellY}`;
 
-          if (!densityMap.has(key)) {
-            densityMap.set(key, { x: cellX, y: cellY, count: 0, sumX: 0, sumY: 0 });
+            if (!densityMap.has(key)) {
+              densityMap.set(key, { x: cellX, y: cellY, count: 0, sumX: 0, sumY: 0 });
+            }
+            const cell = densityMap.get(key)!;
+            cell.count++;
+            cell.sumX += blob.x;
+            cell.sumY += blob.y;
           }
-          const cell = densityMap.get(key)!;
-          cell.count++;
-          cell.sumX += blob.x;
-          cell.sumY += blob.y;
+
+          // Find top N densest cells as gravity centers
+          const candidates = Array.from(densityMap.values())
+            .filter(cell => cell.count >= GRAVITY_CENTER_MIN_BLOBS)
+            .sort((a, b) => b.count - a.count)
+            .slice(0, MAX_GRAVITY_CENTERS);
+
+          // Update TARGET gravity centers (not actual - those are lerped below)
+          targetGravityCentersRef.current = candidates.map(cell => ({
+            x: cell.sumX / cell.count,
+            y: cell.sumY / cell.count,
+            strength: GRAVITY_CENTER_STRENGTH * Math.min(1, cell.count / 20),
+          }));
+
+          // Initialize actual centers if empty (first run)
+          if (gravityCentersRef.current.length === 0 && targetGravityCentersRef.current.length > 0) {
+            gravityCentersRef.current = targetGravityCentersRef.current.map(t => ({ ...t }));
+          }
         }
 
-        // Find top N densest cells as gravity centers
-        const candidates = Array.from(densityMap.values())
-          .filter(cell => cell.count >= GRAVITY_CENTER_MIN_BLOBS)
-          .sort((a, b) => b.count - a.count)
-          .slice(0, MAX_GRAVITY_CENTERS);
+        // SMOOTH LERP: Actual gravity centers move toward targets every frame
+        // This prevents jarring "jolt" when targets recalculate
+        // New centers fade IN (start at strength 0), dying centers fade OUT (lerp to 0)
+        const targets = targetGravityCentersRef.current;
+        const actuals = gravityCentersRef.current;
 
-        // Update TARGET gravity centers (not actual - those are lerped below)
-        targetGravityCentersRef.current = candidates.map(cell => ({
-          x: cell.sumX / cell.count,
-          y: cell.sumY / cell.count,
-          strength: GRAVITY_CENTER_STRENGTH * Math.min(1, cell.count / 20),
-        }));
-
-        // Initialize actual centers if empty (first run)
-        if (gravityCentersRef.current.length === 0 && targetGravityCentersRef.current.length > 0) {
-          gravityCentersRef.current = targetGravityCentersRef.current.map(t => ({ ...t }));
+        // 1. Add new centers with strength 0 (they'll fade in via lerp)
+        while (actuals.length < targets.length) {
+          const newTarget = targets[actuals.length];
+          actuals.push({ x: newTarget.x, y: newTarget.y, strength: 0 }); // Fade in from 0
         }
-      }
 
-      // SMOOTH LERP: Actual gravity centers move toward targets every frame
-      // This prevents jarring "jolt" when targets recalculate
-      // New centers fade IN (start at strength 0), dying centers fade OUT (lerp to 0)
-      const targets = targetGravityCentersRef.current;
-      const actuals = gravityCentersRef.current;
-
-      // 1. Add new centers with strength 0 (they'll fade in via lerp)
-      while (actuals.length < targets.length) {
-        const newTarget = targets[actuals.length];
-        actuals.push({ x: newTarget.x, y: newTarget.y, strength: 0 }); // Fade in from 0
-      }
-
-      // 2. Lerp all actuals toward their targets (or toward 0 for extras)
-      for (let i = 0; i < actuals.length; i++) {
-        const actual = actuals[i];
-        if (i < targets.length) {
-          // Active center: lerp toward target
-          const target = targets[i];
-          actual.x += (target.x - actual.x) * GRAVITY_CENTER_LERP;
-          actual.y += (target.y - actual.y) * GRAVITY_CENTER_LERP;
-          actual.strength += (target.strength - actual.strength) * GRAVITY_CENTER_LERP;
-        } else {
-          // Dying center: lerp strength toward 0 (fade out)
-          actual.strength += (0 - actual.strength) * GRAVITY_CENTER_LERP;
+        // 2. Lerp all actuals toward their targets (or toward 0 for extras)
+        for (let i = 0; i < actuals.length; i++) {
+          const actual = actuals[i];
+          if (i < targets.length) {
+            // Active center: lerp toward target
+            const target = targets[i];
+            actual.x += (target.x - actual.x) * GRAVITY_CENTER_LERP;
+            actual.y += (target.y - actual.y) * GRAVITY_CENTER_LERP;
+            actual.strength += (target.strength - actual.strength) * GRAVITY_CENTER_LERP;
+          } else {
+            // Dying center: lerp strength toward 0 (fade out)
+            actual.strength += (0 - actual.strength) * GRAVITY_CENTER_LERP;
+          }
         }
-      }
 
-      // 3. Remove fully faded centers (strength below threshold)
-      gravityCentersRef.current = actuals.filter(c => c.strength > GRAVITY_CENTER_FADE_THRESHOLD);
+        // 3. Remove fully faded centers (strength below threshold)
+        gravityCentersRef.current = actuals.filter(c => c.strength > GRAVITY_CENTER_FADE_THRESHOLD);
+      }
 
       const centerX = viewport.width / 2;
       const centerY = viewport.height / 2;
 
       for (const blob of updatedBlobs) {
-        // Weak fixed center gravity (fallback to prevent total dispersion)
+        // Fixed center gravity - pulls blobs toward page center
         const distFromCenter = Math.sqrt(blob.x * blob.x + blob.y * blob.y);
         if (distFromCenter > 50) {
           blob.x -= blob.x * FIXED_CENTER_GRAVITY * deltaMs;
           blob.y -= blob.y * FIXED_CENTER_GRAVITY * deltaMs;
         }
 
-        // Dynamic gravity centers - pull toward where blobs congregate
-        for (const center of gravityCentersRef.current) {
-          const dx = center.x - blob.x;
-          const dy = center.y - blob.y;
-          const dist = Math.sqrt(dx * dx + dy * dy);
+        // Dynamic gravity centers - pull toward where blobs congregate (only when enabled)
+        if (ENABLE_DYNAMIC_GRAVITY) {
+          for (const center of gravityCentersRef.current) {
+            const dx = center.x - blob.x;
+            const dy = center.y - blob.y;
+            const dist = Math.sqrt(dx * dx + dy * dy);
 
-          // Only apply if within influence radius and not too close
-          if (dist > 20 && dist < GRAVITY_CENTER_RADIUS * 2) {
-            const pull = center.strength * deltaMs / Math.max(50, dist * 0.5);
-            blob.x += dx * pull;
-            blob.y += dy * pull;
+            // Only apply if within influence radius and not too close
+            if (dist > 20 && dist < GRAVITY_CENTER_RADIUS * 2) {
+              const pull = center.strength * deltaMs / Math.max(50, dist * 0.5);
+              blob.x += dx * pull;
+              blob.y += dy * pull;
+            }
           }
         }
 
@@ -698,8 +744,10 @@ export function Blobulator({ audio }: BlobulatorProps) {
           const distance = Math.sqrt(dx * dx + dy * dy);
 
           if (distance < BLOB_INFLUENCE_RADIUS && distance > 0) {
-            // Weight by inverse distance (closer = stronger influence)
-            const weight = 1 - (distance / BLOB_INFLUENCE_RADIUS);
+            // Weight by inverse distance AND lifecycle
+            // Dying blobs gradually reduce their influence on neighbors
+            const distanceWeight = 1 - (distance / BLOB_INFLUENCE_RADIUS);
+            const weight = distanceWeight * other.lifecycle;
             avgVx += other.vx * weight;
             avgVy += other.vy * weight;
             neighborCount += weight;
@@ -715,36 +763,126 @@ export function Blobulator({ audio }: BlobulatorProps) {
         }
       }
 
+      // ===== LIFECYCLE TRANSITIONS (smooth spawn/death) =====
+      // Lerp lifecycle toward 1 for spawning blobs, toward 0 for dying blobs
+      for (const blob of updatedBlobs) {
+        if (blob.dying) {
+          // Fading out - lerp toward 0
+          blob.lifecycle = Math.max(0, blob.lifecycle - LIFECYCLE_FADE_RATE * deltaMs);
+        } else if (blob.lifecycle < 1) {
+          // Fading in - lerp toward 1
+          blob.lifecycle = Math.min(1, blob.lifecycle + LIFECYCLE_FADE_RATE * deltaMs);
+        }
+      }
+
+      // EXPERIMENT: Don't remove dead blobs - mark them for recycling instead
+      // The SVG gooey filter recalculates when circles are removed from DOM,
+      // causing visible "jumps" regardless of blob size. By keeping blob count
+      // constant and recycling dead blobs as new spawns, we avoid DOM changes.
+      const deadBlobs: WaveFrontBlob[] = [];
+      for (const blob of updatedBlobs) {
+        if (blob.dying && blob.lifecycle <= LIFECYCLE_REMOVE_THRESHOLD) {
+          deadBlobs.push(blob);
+        }
+      }
+      const removedCount = deadBlobs.length; // For debug flash tracking
+
+      // Instead of filtering out dead blobs, mark them as "ready to recycle"
+      // They'll be reused in spawn logic below instead of creating new blobs
+
       // ===== APPLY SPAWN/DEATH (pure state transformation using pre-calculated values) =====
       // spawnCount and shouldKillOldest were calculated outside setBlobs to avoid Strict Mode issues
 
-      // Spawn new blobs
+      // Spawn new blobs by RECYCLING dead blobs first, then creating new if needed
+      // This keeps SVG circle count stable, avoiding gooey filter recalculation jumps
+      let didSpawn = false;
       if (spawnCount > 0) {
-        for (let i = 0; i < spawnCount; i++) {
+        didSpawn = true;
+        let recycledCount = 0;
+
+        // First, recycle dead blobs
+        for (let i = 0; i < spawnCount && recycledCount < deadBlobs.length; i++) {
+          const deadBlob = deadBlobs[recycledCount];
+          // Reset the dead blob to act as a new spawn
+          const padding = 100;
+          const maxX = (viewport.width / 2) - padding;
+          const maxY = (viewport.height / 2) - padding;
+
+          deadBlob.x = (Math.random() - 0.5) * 2 * maxX;
+          deadBlob.y = (Math.random() - 0.5) * 2 * maxY;
+          deadBlob.vx = (Math.random() - 0.5) * 0.5;
+          deadBlob.vy = (Math.random() - 0.5) * 0.5;
+          deadBlob.direction = Math.random() * Math.PI * 2;
+          deadBlob.size = config.baseBlobSize * (0.8 + Math.random() * 0.4);
+          deadBlob.age = 0;
+          deadBlob.colorIndex = Math.floor(Math.random() * 5);
+          deadBlob.lifecycle = 0;  // Start fading in
+          deadBlob.dying = false;  // No longer dying
+          deadBlob.isFrontier = true;
+
+          recycledCount++;
+        }
+
+        // If we need more spawns than dead blobs available, create new ones
+        for (let i = recycledCount; i < spawnCount; i++) {
           updatedBlobs.push(createRandomBlob());
         }
       }
 
-      // Kill oldest blob (only if we have enough)
-      if (shouldKillOldest && updatedBlobs.length > 20) {
-        const oldestIndex = updatedBlobs.reduce((oldest, blob, idx) =>
-          blob.age > updatedBlobs[oldest].age ? idx : oldest, 0);
-        updatedBlobs.splice(oldestIndex, 1);
+      // Mark oldest blob for death (smooth fade-out instead of instant removal)
+      // Only count non-dying blobs toward population
+      let didMarkDeath = false;
+      const aliveCount = updatedBlobs.filter(b => !b.dying).length;
+      if (shouldKillOldest && aliveCount > 20) {
+        // Find oldest non-dying blob
+        let oldestAge = -1;
+        let oldestIndex = -1;
+        for (let i = 0; i < updatedBlobs.length; i++) {
+          if (!updatedBlobs[i].dying && updatedBlobs[i].age > oldestAge) {
+            oldestAge = updatedBlobs[i].age;
+            oldestIndex = i;
+          }
+        }
+        if (oldestIndex >= 0) {
+          updatedBlobs[oldestIndex].dying = true;
+          didMarkDeath = true;
+        }
       }
 
-      // Recycle blobs that have left the viewport
-      updatedBlobs = recycleBlobsAtEdge(updatedBlobs, viewport.width, viewport.height, 200);
+      // Recycle blobs that have left the viewport (mark as dying for smooth exit)
+      let didEdgeRecycle = false;
+      const halfW = viewport.width / 2 + 200;
+      const halfH = viewport.height / 2 + 200;
+      for (const blob of updatedBlobs) {
+        if (!blob.dying && (Math.abs(blob.x) >= halfW || Math.abs(blob.y) >= halfH)) {
+          blob.dying = true;
+          didEdgeRecycle = true;
+        }
+      }
 
       // Emergency re-seed if we're running critically low
+      let didEmergencyReseed = false;
       if (updatedBlobs.length < 10) {
+        didEmergencyReseed = true;
         for (let i = 0; i < 20; i++) {
           updatedBlobs.push(createRandomBlob());
         }
       }
 
+      // Track debug events for flash indicators (triggered after setBlobs)
+      if (DEBUG_FLASH_ENABLED) {
+        const now = performance.now();
+        if (didSpawn) debugFlashRef.current.spawn = now;
+        if (didMarkDeath) debugFlashRef.current.deathMarked = now;
+        if (removedCount > 0) debugFlashRef.current.deathRemoved = now;
+        if (didEdgeRecycle) debugFlashRef.current.edgeRecycle = now;
+        if (didEmergencyReseed) debugFlashRef.current.emergencyReseed = now;
+      }
+
       // Hard cap - emergency cull if soft cap fails to maintain equilibrium
       // This should rarely trigger now that soft cap is in place
       if (updatedBlobs.length > HARD_CAP_LIMIT) {
+        if (DEBUG_FLASH_ENABLED) debugFlashRef.current.hardCapCull = performance.now();
         updatedBlobs = updatedBlobs
           .sort((a, b) => a.age - b.age)
           .slice(-HARD_CAP_TARGET);
@@ -833,7 +971,10 @@ export function Blobulator({ audio }: BlobulatorProps) {
         const distance = Math.sqrt(dx * dx + dy * dy);
 
         if (distance < BLOB_INFLUENCE_RADIUS && distance > 0) {
-          const weight = 1 - (distance / BLOB_INFLUENCE_RADIUS);
+          // Weight falls off with distance AND scales by lifecycle
+          // Dying blobs gradually reduce their influence on neighbors
+          const distanceWeight = 1 - (distance / BLOB_INFLUENCE_RADIUS);
+          const weight = distanceWeight * other.lifecycle;
           // Compare sizes - if neighbor is larger, influence is positive
           const sizeRatio = other.size / blob.size;
           totalInfluence += (sizeRatio - 1) * weight;
@@ -850,7 +991,11 @@ export function Blobulator({ audio }: BlobulatorProps) {
       }
     }
 
-    return baseSize * blobVariation * bassThump * amplitudeBoost * midWobble * breathingMultiplier * clusterPulseMultiplier * neighborSizeInfluence;
+    // Lifecycle multiplier: smooth spawn/death transitions via size scaling
+    // Use easeOutQuad for more natural growth (fast start, slow end)
+    const lifecycleEased = 1 - (1 - blob.lifecycle) * (1 - blob.lifecycle);
+
+    return baseSize * blobVariation * bassThump * amplitudeBoost * midWobble * breathingMultiplier * clusterPulseMultiplier * neighborSizeInfluence * lifecycleEased;
   };
 
   // Calculate base HSL color for a blob (without neighbor blending)
@@ -964,7 +1109,9 @@ export function Blobulator({ audio }: BlobulatorProps) {
 
       if (distance < BLOB_INFLUENCE_RADIUS) {
         // Weight falls off with distance (1 at center, 0 at radius edge)
-        const weight = 1 - (distance / BLOB_INFLUENCE_RADIUS);
+        // Also scale by lifecycle so dying blobs gradually lose influence
+        const distanceWeight = 1 - (distance / BLOB_INFLUENCE_RADIUS);
+        const weight = distanceWeight * other.lifecycle;
         const otherColor = getBlobBaseHSL(other);
 
         // Handle hue wrapping (e.g., 350° and 10° should average to 0°, not 180°)
@@ -1009,8 +1156,47 @@ export function Blobulator({ audio }: BlobulatorProps) {
   const bgSaturation = 20 - bpmNormalized * 10 + inertiaIntensity * 15; // Inertia adds up to 15% saturation
   const backgroundColor = `hsl(270, ${Math.min(35, bgSaturation)}%, ${Math.min(18, bgLightness)}%)`;
 
+  // Current time for calculating debug flash visibility
+  const now = performance.now();
+  // Use debugFlashTrigger to ensure re-renders when flashes change
+  void debugFlashTrigger;
+
   return (
     <div style={{ ...styles.container, backgroundColor }} onClick={handleBackgroundClick}>
+      {/* Debug flash indicators - fixed position slots for each event type */}
+      {/* Each event always appears in the same slot for easy pattern recognition */}
+      {DEBUG_FLASH_ENABLED && (
+        <div style={{
+          position: 'absolute',
+          top: 20,
+          left: '50%',
+          transform: 'translateX(-50%)',
+          display: 'flex',
+          gap: 10,
+          zIndex: 100,
+          pointerEvents: 'none',
+        }}>
+          {(Object.entries(DEBUG_EVENTS) as [DebugEventType, string][]).map(([eventType, color]) => {
+            const isActive = now - debugFlashRef.current[eventType] < DEBUG_FLASH_DURATION_MS;
+            return (
+              <div
+                key={eventType}
+                title={eventType}
+                style={{
+                  width: DEBUG_FLASH_SIZE,
+                  height: DEBUG_FLASH_SIZE,
+                  borderRadius: '50%',
+                  backgroundColor: isActive ? color : 'transparent',
+                  border: `2px solid ${color}40`,
+                  boxShadow: isActive ? `0 0 20px ${color}` : 'none',
+                  transition: 'background-color 50ms, box-shadow 50ms',
+                }}
+              />
+            );
+          })}
+        </div>
+      )}
+
       {/* Control Panel - stop propagation so clicks here don't toggle pause */}
       <div style={styles.controlPanel} onClick={(e) => e.stopPropagation()}>
         <h1 style={styles.title}>Blobulator</h1>
@@ -1079,20 +1265,26 @@ export function Blobulator({ audio }: BlobulatorProps) {
         </defs>
 
         <g filter="url(#goo)">
-          {blobs.map((blob, index) => (
-            <circle
-              key={blob.id}
-              cx={centerX + blob.x}
-              cy={centerY + blob.y}
-              r={getDisplaySize(blob, index)}
-              fill={getDynamicColor(blob, index)}
-            />
-          ))}
+          {blobs.map((blob, index) => {
+            // Truly dead blobs (dying + lifecycle exhausted) render with r=0
+            // This keeps them in DOM (no circle count change that triggers filter recalc)
+            // but they contribute nothing to the gooey blur
+            const isTrulyDead = blob.dying && blob.lifecycle <= LIFECYCLE_REMOVE_THRESHOLD;
+            return (
+              <circle
+                key={blob.id}
+                cx={centerX + blob.x}
+                cy={centerY + blob.y}
+                r={isTrulyDead ? 0 : getDisplaySize(blob, index)}
+                fill={getDynamicColor(blob, index)}
+              />
+            );
+          })}
         </g>
 
-        {/* Gravity center indicators - dots showing where blobs congregate */}
+        {/* Gravity center indicators - dots showing where blobs congregate (only when dynamic gravity enabled) */}
         {/* Opacity fades with strength (fade-in/fade-out effect) */}
-        {gravityCentersRef.current.map((center, i) => {
+        {ENABLE_DYNAMIC_GRAVITY && gravityCentersRef.current.map((center, i) => {
           const opacity = Math.min(1, center.strength / GRAVITY_CENTER_STRENGTH);
           return (
             <circle
