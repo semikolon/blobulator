@@ -103,7 +103,7 @@ const SPATIAL_HASH_CELL_SIZE = 100;   // Must be >= BLOB_INFLUENCE_RADIUS (80px)
 const SPATIAL_HASH_MIN_BLOBS = 50;    // Below this, O(n²) is faster than hash overhead
 
 // Debug flash indicators - visual debugging for correlating jerks to code events
-const DEBUG_FLASH_ENABLED = true;     // Set to false to hide debug indicators
+const DEBUG_FLASH_ENABLED = false;    // Set to true to show debug indicators
 const DEBUG_FLASH_DURATION_MS = 150;  // How long each flash lasts
 const DEBUG_FLASH_SIZE = 40;          // Dot diameter in pixels
 

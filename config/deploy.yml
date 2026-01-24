@@ -1,3 +1,4 @@
+<% require "dotenv"; Dotenv.load(".env") %>
 # Blobulator Kamal Deployment Configuration
 # Target: Dell Optiplex 7010 (blobulator.fredrikbranstrom.se, voidulator.fredrikbranstrom.se)
 # Architecture: nginx (SSL) → kamal-proxy → nginx container (static files)
@@ -21,8 +22,7 @@ proxy:
   app_port: 80  # nginx inside container listens on 80
   forward_headers: true
 
-# Self-hosted Knot registry on Dell (no Docker Desktop needed on Mac!)
-# Deployed via ~/Projects/knot - see SYSTEM_REFERENCE.md
+# Knot self-hosted registry on Dell
 registry:
   server: registry.fredrikbranstrom.se
   username: admin
@@ -33,9 +33,10 @@ registry:
 builder:
   arch: amd64
   remote: ssh://fredrik@213.164.219.201:2222
-  cache:
-    type: registry
-    options: mode=max
+  # cache disabled temporarily - buildkit auth issue
+  # cache:
+  #   type: registry
+  #   options: mode=max
 
 # Environment variables (minimal - just timezone)
 env:
