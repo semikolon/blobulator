@@ -1,0 +1,1112 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>Laser Room — WebGL Pulse, Multi-emitters, Presets, Renderer</title>
+<style>
+  :root{
+    --bg:#0c0d10; --panel:#14161b; --stroke:#3b3f46;
+    --text:#e5e7eb; --text-dim:#9ca3af; --muted:#7c8594;
+  }
+  *{box-sizing:border-box}
+  html,body{height:100%}
+  body{margin:0;background:#0c0d10;color:var(--text);font:14px/1.35 system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial}
+
+  .app{display:grid;grid-template-columns:1fr 460px;gap:18px;height:100dvh;padding:16px}
+  @media (max-width:980px){.app{grid-template-columns:1fr;grid-auto-rows:min-content}}
+
+  .stage{position:relative;border:1px solid var(--stroke);border-radius:14px;overflow:hidden;min-height:58vh;background:linear-gradient(180deg,#0e1014,#0b0c10)}
+  canvas{display:block;width:100%;height:100%}
+  #gl{position:absolute;inset:0}
+  #overlay{position:absolute;inset:0;pointer-events:auto}
+  .hud{position:absolute;left:12px;top:12px;display:flex;gap:8px;flex-wrap:wrap}
+  .tag{background:#0009;padding:6px 8px;border:1px solid #ffffff12;border-radius:10px;color:#cbd5e1}
+
+  .panel{background:var(--panel);border:1px solid var(--stroke);border-radius:14px;padding:14px;overflow:auto}
+  h2{font-size:16px;margin:2px 2px 10px}
+  .grid{display:grid;grid-template-columns:1fr 160px;gap:10px 12px}
+  .row{display:contents}
+  label{color:var(--text-dim);align-self:center}
+
+  input[type="range"],select,input[type="number"],input[type="text"]{
+    width:100%;background:#0e1116;color:#e5e7eb;border:1px solid #22262d;
+    border-radius:10px;padding:7px 10px;box-shadow:inset 0 0 0 1px #000
+  }
+  input[type="range"]{padding:0;height:30px}
+  .two{grid-column:span 2;display:flex;gap:10px}
+  .button{cursor:pointer;user-select:none;background:#10141b;border:1px solid #242a33;color:#e5e7eb;padding:8px 10px;border-radius:10px;flex:1;text-align:center}
+  .group{margin-top:12px;border:1px solid var(--stroke);border-radius:12px;padding:10px;background:linear-gradient(180deg,#12151b,#0e1116)}
+  .group-title{font-weight:600;margin-bottom:8px}
+  .subgrid{display:grid;grid-template-columns:1fr 160px;gap:10px 12px}
+  .hint{grid-column:span 2;color:#9aa4b2;font-size:12px}
+  .warn{font-size:12px;color:#f59e0b}
+
+  /* color swatches */
+  #beamColors{display:grid;grid-template-columns:repeat(6,1fr);gap:8px;margin-top:8px;grid-column:span 2}
+  #beamColors .sw{display:flex;align-items:center;gap:6px}
+  #beamColors .sw label{font-size:12px;color:#aab1bd;width:28px;text-align:right}
+  input[type="color"]{
+    appearance:none;width:100%;height:26px;border:none;padding:0;border-radius:8px;
+    background:#0e1116; /* fixes stray white box */
+  }
+</style>
+</head>
+<body>
+<div class="app">
+  <div class="stage">
+    <canvas id="gl" aria-label="beam canvas (webgl2)"></canvas>
+    <canvas id="overlay" aria-label="overlay (2d)"></canvas>
+    <div class="hud">
+      <div class="tag" id="bouncesTag">Bounces: 0</div>
+      <div class="tag" id="fpsTag">FPS: 0</div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <h2>Laser Room Controls</h2>
+    <div class="grid">
+      <div class="row"><label>Room shape</label>
+        <select id="shape">
+          <option value="circle" selected>Circle</option>
+          <option value="regular-3">Triangle</option>
+          <option value="regular-4">Square</option>
+          <option value="regular-5">Pentagon</option>
+          <option value="regular-6">Hexagon</option>
+          <option value="random-5">Randomgon (5–10)</option>
+          <option value="blob">Blob (smooth)</option>
+        </select>
+      </div>
+
+      <div class="row"><label>Reflectivity (eased)</label>
+        <input id="reflect" type="range" min="0" max="1" step="0.001" value="0.80">
+      </div>
+
+      <div class="row"><label>Max bounces</label>
+        <input id="bounces" type="range" min="1" max="300" step="1" value="8">
+      </div>
+      <div class="row"><label>Exact bounces</label>
+        <input id="bouncesNum" type="number" min="1" max="300" step="1" value="8">
+      </div>
+
+      <div class="row"><label>Beam width</label>
+        <input id="beamWidth" type="range" min="1" max="8" step="1" value="2">
+      </div>
+
+      <div class="row"><label>Beam count</label>
+        <input id="beamCount" type="range" min="1" max="24" step="1" value="4">
+      </div>
+      <div class="row"><label>Exact beam count</label>
+        <input id="beamCountNum" type="number" min="1" max="24" step="1" value="4">
+      </div>
+
+      <div class="row"><label>Emitters</label>
+        <input id="emCount" type="number" min="1" max="4" step="1" value="1">
+      </div>
+      <div class="two">
+        <div class="button" id="centerEmitters">Center emitters</div>
+        <div class="button" id="shuffleShape">Shuffle shape</div>
+      </div>
+
+      <div class="row"><label>Spread (°)</label>
+        <input id="spread" type="range" min="0" max="180" step="0.1" value="0">
+      </div>
+      <div class="row"><label>Exact spread (°)</label>
+        <input id="spreadNum" type="number" min="0" max="180" step="0.1" value="0">
+      </div>
+
+      <div class="row"><label>Angle (°)</label>
+        <input id="angle" type="range" min="0" max="360" step="0.1" value="0">
+      </div>
+
+      <div class="row"><label>Global speed (°/s)</label>
+        <input id="rotSpeed" type="range" min="0" max="5" step="0.01" value="0">
+      </div>
+      <div class="row"><label>Exact global speed</label>
+        <input id="rotSpeedNum" type="number" min="0" max="5" step="0.01" value="0">
+      </div>
+      <div class="row"><label>Speed range</label>
+        <select id="speedRange">
+          <option value="5" selected>Ultra slow (0–5)</option>
+          <option value="30">Slow (0–30)</option>
+          <option value="360">Normal (0–360)</option>
+          <option value="720">Fast (0–720)</option>
+          <option value="1440">Ultra fast (0–1440)</option>
+        </select>
+      </div>
+      <div class="row"><label>Speed multiplier</label>
+        <input id="speedMultiplier" type="range" min="0" max="2" step="0.01" value="1">
+      </div>
+      <div class="row"><label>Exact speed multiplier</label>
+        <input id="speedMultiplierNum" type="number" min="0" max="2" step="0.01" value="1">
+      </div>
+    </div>
+
+    <div class="group">
+      <div class="group-title">Per-beam Colors & Schemes</div>
+      <div class="subgrid">
+        <div class="row"><label>Scheme</label>
+          <select id="beamScheme">
+            <option value="rainbow" selected>Even rainbow</option>
+            <option value="triad">Triad</option>
+            <option value="analogous">Analogous</option>
+            <option value="warm">Warm</option>
+            <option value="cool">Cool</option>
+            <option value="mono">Monochrome</option>
+            <option value="random">Random</option>
+            <option value="custom">Custom (edit swatches)</option>
+          </select>
+        </div>
+        <div class="row"><label>Shuffle</label>
+          <div class="button" id="shuffleScheme">Shuffle scheme</div>
+        </div>
+      </div>
+      <div id="beamColors"></div>
+      <div class="hint">Switch to <b>Custom</b> to hand-pick each beam color. Swatches update with Beam count.</div>
+    </div>
+
+    <div class="group">
+      <div class="group-title">Per-beam Rotation (°/s)</div>
+      <div class="two">
+        <div class="button" id="fillPrimesRaw">Prime speeds (raw)</div>
+        <div class="button" id="fillPrimesScaled">Prime speeds (scaled)</div>
+      </div>
+      <div id="beamSpeeds" class="subgrid"></div>
+      <div class="hint">Adds to the global speed. Use negative for opposite rotation.</div>
+      <div class="two" style="margin-top:8px">
+        <div class="button" id="resetPhases">Reset beam positions</div>
+        <div class="button" id="savePreset">Save preset</div>
+      </div>
+      <div class="two">
+        <input id="presetFile" type="file" accept="application/json" style="display:none">
+        <div class="button" id="loadPreset">Load preset</div>
+      </div>
+      <div class="two">
+        <div class="button" id="presetSpectacular">✨ Spectacular glow</div>
+        <div class="button" id="presetSubtle">💫 Subtle elegance</div>
+      </div>
+      <div class="two">
+        <div class="button" id="presetRainbow">🌈 Rainbow burst</div>
+        <div class="button" id="presetCyberpunk">⚡ Cyberpunk</div>
+      </div>
+    </div>
+
+    <div class="group">
+      <div class="group-title">Pulse (WebGL shader) — OFF by default</div>
+      <div class="warn">CPU/GPU cost grows with bounces and emitters.</div>
+      <div class="subgrid">
+        <div class="row"><label>Enable</label>
+          <select id="pulseEnable"><option value="off" selected>Off</option><option value="on">On</option></select>
+        </div>
+        <div class="row"><label>Shape</label>
+          <select id="pulseShape"><option value="sine" selected>Sine</option><option value="square">Square (smooth)</option></select>
+        </div>
+        <div class="row"><label>Amplitude</label>
+          <input id="pulseAmp" type="range" min="0" max="1" step="0.01" value="1">
+        </div>
+        <div class="row"><label>Frequency (cycles / 100px)</label>
+          <input id="pulseFreq" type="range" min="0.05" max="6" step="0.05" value="1.2">
+        </div>
+        <div class="row"><label>Speed (px/s)</label>
+          <input id="pulseSpeed" type="range" min="0" max="900" step="1" value="240">
+        </div>
+        <div class="row"><label>Quality (edge softness)</label>
+          <input id="pulseQuality" type="range" min="0" max="1" step="0.01" value="0.18">
+        </div>
+      </div>
+      <div class="hint">Alpha = intensity × mix(1, Wave(d − v·t), amplitude). Peak = full color; trough = transparent.</div>
+    </div>
+
+    <div class="group">
+      <div class="group-title">Beam Glow Effects</div>
+      <div class="subgrid">
+        <div class="row"><label>Glow layers</label>
+          <select id="glowLayers">
+            <option value="0">Off</option>
+            <option value="1">Single glow</option>
+            <option value="2" selected>Double glow</option>
+            <option value="3">Triple glow</option>
+          </select>
+        </div>
+        <div class="row"><label>Glow intensity</label>
+          <input id="glowIntensity" type="range" min="0.1" max="3" step="0.1" value="1.5">
+        </div>
+        <div class="row"><label>Glow spread</label>
+          <input id="glowSpread" type="range" min="1" max="15" step="0.5" value="3">
+        </div>
+        <div class="row"><label>Core brightness</label>
+          <input id="glowCore" type="range" min="0.5" max="2" step="0.1" value="1.2">
+        </div>
+        <div class="row"><label>Blend mode</label>
+          <select id="glowBlend">
+            <option value="normal">Normal</option>
+            <option value="add" selected>Additive</option>
+            <option value="screen">Screen</option>
+          </select>
+        </div>
+        <div class="row"><label>Bloom effect</label>
+          <select id="bloomEffect">
+            <option value="off" selected>Off</option>
+            <option value="subtle">Subtle</option>
+            <option value="dramatic">Dramatic</option>
+          </select>
+        </div>
+      </div>
+      <div class="hint">Multi-layer glow with additive blending creates spectacular beam effects. Higher values = more GPU intensive.</div>
+    </div>
+
+    <div class="group">
+      <div class="group-title">Renderer (fixed resolution)</div>
+      <div class="subgrid">
+        <div class="row"><label>Width × Height</label>
+          <input id="renSize" type="text" value="1920x1080">
+        </div>
+        <div class="row"><label>FPS</label>
+          <input id="renFps" type="number" min="1" max="120" step="1" value="60">
+        </div>
+        <div class="row"><label>Duration (s)</label>
+          <input id="renSecs" type="number" min="1" max="120" step="1" value="8">
+        </div>
+      </div>
+      <div class="two" style="margin-top:8px">
+        <div class="button" id="renderStart">Render video</div>
+        <div class="button" id="renderStop">Stop</div>
+      </div>
+      <div class="hint">Renders at fixed dt/res to a WebM via <code>MediaRecorder</code> with a high bitrate. We can add WebCodecs next for offline speed.</div>
+    </div>
+  </div>
+</div>
+
+<script>
+(() => {
+  // ---- DOM ----
+  const glCanvas = document.getElementById('gl');
+  const ovCanvas = document.getElementById('overlay');
+  const octx = ovCanvas.getContext('2d');
+
+  const shapeSel = document.getElementById('shape');
+  const reflectEl = document.getElementById('reflect');
+  const bouncesEl = document.getElementById('bounces');
+  const bouncesNumEl = document.getElementById('bouncesNum');
+  const widthEl = document.getElementById('beamWidth');
+  const countEl = document.getElementById('beamCount');
+  const countNumEl = document.getElementById('beamCountNum');
+  const emCountEl = document.getElementById('emCount');
+  const centerEmittersBtn = document.getElementById('centerEmitters');
+  const shuffleShapeBtn = document.getElementById('shuffleShape');
+
+  const spreadEl = document.getElementById('spread');
+  const spreadNumEl = document.getElementById('spreadNum');
+  const angleEl = document.getElementById('angle');
+  const rotSpeedEl = document.getElementById('rotSpeed');
+  const rotSpeedNum = document.getElementById('rotSpeedNum');
+  const speedRangeEl = document.getElementById('speedRange');
+  const speedMultiplierEl = document.getElementById('speedMultiplier');
+  const speedMultiplierNumEl = document.getElementById('speedMultiplierNum');
+
+  const beamSchemeEl = document.getElementById('beamScheme');
+  const shuffleSchemeBtn = document.getElementById('shuffleScheme');
+  const beamColorsDiv = document.getElementById('beamColors');
+  const fillPrimesRawBtn = document.getElementById('fillPrimesRaw');
+  const fillPrimesScaledBtn = document.getElementById('fillPrimesScaled');
+  const resetPhasesBtn = document.getElementById('resetPhases');
+  const beamSpeedsDiv = document.getElementById('beamSpeeds');
+  const savePresetBtn = document.getElementById('savePreset');
+  const loadPresetBtn = document.getElementById('loadPreset');
+  const presetFile = document.getElementById('presetFile');
+
+  const pulseEnableEl = document.getElementById('pulseEnable');
+  const pulseShapeEl = document.getElementById('pulseShape');
+  const pulseAmpEl = document.getElementById('pulseAmp');
+  const pulseFreqEl = document.getElementById('pulseFreq');
+  const pulseSpeedEl = document.getElementById('pulseSpeed');
+  const pulseQualityEl = document.getElementById('pulseQuality');
+
+  const glowLayersEl = document.getElementById('glowLayers');
+  const glowIntensityEl = document.getElementById('glowIntensity');
+  const glowSpreadEl = document.getElementById('glowSpread');
+  const glowCoreEl = document.getElementById('glowCore');
+  const glowBlendEl = document.getElementById('glowBlend');
+  const bloomEffectEl = document.getElementById('bloomEffect');
+
+  const fpsTag = document.getElementById('fpsTag');
+  const bouncesTag = document.getElementById('bouncesTag');
+
+  const renSizeEl = document.getElementById('renSize');
+  const renFpsEl = document.getElementById('renFps');
+  const renSecsEl = document.getElementById('renSecs');
+  const renderStartBtn = document.getElementById('renderStart');
+  const renderStopBtn = document.getElementById('renderStop');
+
+  // ---- State ----
+  const S = {
+    seed: (Math.random()*1e9)|0,
+    polygonType: 'circle', sides: 0, isCircle: true,
+    circle:{cx:0,cy:0,R:0}, vertices:[],
+    // optics
+    reflectSlider: parseFloat(reflectEl.value),
+    reflectivity: 0.8,
+    maxBounces: parseInt(bouncesEl.value,10),
+    beamWidth: parseInt(widthEl.value,10),
+    beamCount: parseInt(countEl.value,10),
+    spreadDeg: parseFloat(spreadEl.value),
+    angleDeg: 0,
+    rotationSpeed: parseFloat(rotSpeedEl.value),
+    speedMax: parseFloat(speedRangeEl.value),
+    // emitters
+    emitters: [{x:0,y:0}],
+    draggingIdx: -1,
+    // color palette
+    beamScheme: beamSchemeEl.value,
+    beamPalette: [],
+    // per-beam rotation
+    perBeamSpeed: [], perBeamPhase: [],
+    primeMode: 'raw',
+    speedMultiplier: 1.0,
+    // performance cache
+    pathCache: new Map(),
+    cacheKey: '',
+    lastCacheTime: 0,
+    // pulse (shader)
+    pulseOn:false, pulseShape:'sine', pulseAmp:parseFloat(pulseAmpEl.value),
+    pulseFreqCP100:parseFloat(pulseFreqEl.value),
+    pulseSpeed:parseFloat(pulseSpeedEl.value),
+    pulseSoft:parseFloat(pulseQualityEl.value),
+    // glow effects
+    glowLayers:parseInt(glowLayersEl.value,10),
+    glowIntensity:parseFloat(glowIntensityEl.value),
+    glowSpread:parseFloat(glowSpreadEl.value),
+    glowCore:parseFloat(glowCoreEl.value),
+    glowBlend:glowBlendEl.value,
+    bloomEffect:bloomEffectEl.value,
+    // sizing / timing
+    dpr:1, lastSegments:0
+  };
+
+  // ---- Utils ----
+  const clamp=(v,a,b)=>Math.max(a,Math.min(b,v));
+  function rand(){ S.seed=(1664525*S.seed+1013904223)>>>0; return S.seed/0x100000000; }
+  const add=(a,b)=>({x:a.x+b.x,y:a.y+b.y});
+  const sub=(a,b)=>({x:a.x-b.x,y:a.y-b.y});
+  const mul=(a,s)=>({x:a.x*s,y:a.y*s});
+  function norm(v){ const m=Math.hypot(v.x,v.y)||1; return {x:v.x/m,y:v.y/m}; }
+  const cross=(a,b)=>a.x*b.y-a.y*b.x;
+  const reflectByNormal=(d,n)=>norm(sub(d,{x:n.x*2*(d.x*n.x+d.y*n.y), y:n.y*2*(d.x*n.x+d.y*n.y)}));
+  function hslToRgb(h,s,l){ s/=100; l/=100; const k=n=>(n+h/30)%12; const a=s*Math.min(l,1-l);
+    const f=n=>l-a*Math.max(-1,Math.min(k(n)-3,Math.min(9-k(n),1)));
+    return [f(0),f(8),f(4)];
+  }
+  function hexToHsl(hex){ hex=hex.replace('#',''); if(hex.length===3) hex=hex.split('').map(c=>c+c).join('');
+    const r=parseInt(hex.slice(0,2),16)/255,g=parseInt(hex.slice(2,4),16)/255,b=parseInt(hex.slice(4,6),16)/255;
+    const max=Math.max(r,g,b), min=Math.min(r,g,b); let h=0,s=0,l=(max+min)/2;
+    if(max!==min){ const d=max-min; s=l>0.5?d/(2-max-min):d/(max+min);
+      switch(max){case r:h=(g-b)/d+(g<b?6:0);break;case g:h=(b-r)/d+2;break;default:h=(r-g)/d+4;} h*=60; s*=100; l*=100;
+    } else { s=0; l*=100; }
+    return {h,s,l};
+  }
+  function hslToHex(h,s,l){ s/=100;l/=100;const k=n=>(n+h/30)%12;const a=s*Math.min(l,1-l);
+    const f=n=>l-a*Math.max(-1,Math.min(k(n)-3,Math.min(9-k(n),1)));
+    const r=Math.round(255*f(0)), g=Math.round(255*f(8)), b=Math.round(255*f(4));
+    return '#'+[r,g,b].map(v=>v.toString(16).padStart(2,'0')).join('');
+  }
+
+  function ensurePaletteSize(n){ while(S.beamPalette.length<n){ const i=S.beamPalette.length; S.beamPalette.push({h:i*360/n,s:80,l:55}); } if(S.beamPalette.length>n) S.beamPalette.length=n; }
+  function generatePalette(scheme){
+    const n=S.beamCount|0; const base=rand()*360; const out=[];
+    if(scheme==='rainbow'){ for(let i=0;i<n;i++) out.push({h:base+i*360/n,s:80,l:55}); }
+    else if(scheme==='triad'){ const tri=[base,base+120,base+240]; for(let i=0;i<n;i++) out.push({h:tri[i%3]+(rand()*20-10),s:80,l:55}); }
+    else if(scheme==='analogous'){ const span=60; for(let i=0;i<n;i++) out.push({h:base-span/2+span*(i/(n-1||1)),s:80,l:55}); }
+    else if(scheme==='warm'){ for(let i=0;i<n;i++) out.push({h:rand()*60,s:85,l:55}); }
+    else if(scheme==='cool'){ for(let i=0;i<n;i++) out.push({h:140+rand()*180,s:70,l:55}); }
+    else if(scheme==='mono'){ for(let i=0;i<n;i++) out.push({h:base,s:80,l:40+30*(i/(n-1||1))}); }
+    else if(scheme==='random'){ for(let i=0;i<n;i++) out.push({h:rand()*360,s:50+rand()*50,l:40+rand()*20}); }
+    else { ensurePaletteSize(n); return S.beamPalette.slice(); }
+    return out;
+  }
+  function rebuildBeamSwatches(){
+    const n=S.beamCount|0; ensurePaletteSize(n); beamColorsDiv.innerHTML='';
+    for(let i=0;i<n;i++){
+      const w=document.createElement('div'); w.className='sw';
+      const lab=document.createElement('label'); lab.textContent='B'+(i+1);
+      const inp=document.createElement('input'); inp.type='color'; inp.value=hslToHex(S.beamPalette[i].h,S.beamPalette[i].s,S.beamPalette[i].l);
+      inp.addEventListener('input',()=>{ S.beamPalette[i]=hexToHsl(inp.value); S.beamScheme='custom'; beamSchemeEl.value='custom'; });
+      w.append(lab,inp); beamColorsDiv.appendChild(w);
+    }
+  }
+
+  function ensureSpeedArrays(n){ while(S.perBeamSpeed.length<n) S.perBeamSpeed.push(0); S.perBeamSpeed.length=n; while(S.perBeamPhase.length<n) S.perBeamPhase.push(0); S.perBeamPhase.length=n; }
+  function rebuildBeamSpeedInputs(){
+    const n=S.beamCount|0; ensureSpeedArrays(n); beamSpeedsDiv.innerHTML='';
+    for(let i=0;i<n;i++){
+      const d=document.createElement('div'); d.className='sw';
+      const lab=document.createElement('label'); lab.textContent='B'+(i+1);
+      const inp=document.createElement('input'); inp.type='number'; inp.step='0.01'; inp.min=String(-S.speedMax); inp.max=String(S.speedMax); inp.value=(S.perBeamSpeed[i]||0).toFixed(2);
+      inp.addEventListener('input',()=>{ let v=parseFloat(inp.value); if(!isFinite(v)) v=0; v=clamp(v,-S.speedMax,S.speedMax); S.perBeamSpeed[i]=v; });
+      d.append(lab,inp); beamSpeedsDiv.appendChild(d);
+    }
+  }
+  function resetPhases(){ for(let i=0;i<S.perBeamPhase.length;i++) S.perBeamPhase[i]=0; }
+
+  function firstNPrimes(n){ const primes=[]; let x=2; while(primes.length<n){ let ok=true; for(const p of primes){ if(p*p>x) break; if(x%p===0){ ok=false; break; } } if(ok) primes.push(x); x++; } return primes; }
+
+  function setSpeedMax(newMax){
+    S.speedMax = newMax;
+    // update UI bounds
+    rotSpeedEl.max = rotSpeedNum.max = String(newMax);
+    document.querySelectorAll('#beamSpeeds input[type="number"]').forEach(inp=>{ inp.min=String(-newMax); inp.max=String(newMax); });
+    // set closest range label
+    if(newMax<=5) speedRangeEl.value='5'; else if(newMax<=30) speedRangeEl.value='30'; else if(newMax<=360) speedRangeEl.value='360'; else if(newMax<=720) speedRangeEl.value='720'; else speedRangeEl.value='1440';
+  }
+
+  function applyPrimeSpeeds(mode){
+    const n=S.beamCount|0; ensureSpeedArrays(n);
+    const primes=firstNPrimes(n);
+    let speeds;
+    if(mode==='scaled'){
+      const mx=primes[primes.length-1]||1; speeds=primes.map(p=>p * (S.speedMax/mx));
+    } else {
+      speeds = primes.slice(); // RAW: do not clamp to speedMax
+      const needed = Math.max(...speeds.map(v=>Math.abs(v)));
+      if(S.speedMax < needed){ setSpeedMax(needed); }
+    }
+    for(let i=0;i<n;i++) S.perBeamSpeed[i]=speeds[i];
+    S.primeMode=mode;
+    rebuildBeamSpeedInputs();
+  }
+
+  // ---- Geometry & collisions ----
+  function resize(){
+    const rect = glCanvas.parentElement.getBoundingClientRect();
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    S.dpr = dpr;
+    const w = Math.floor(rect.width * dpr), h = Math.floor(rect.height * dpr);
+    [glCanvas, ovCanvas].forEach(c => { c.width = w; c.height = h; c.style.width = rect.width+'px'; c.style.height = rect.height+'px'; });
+    buildShape();
+    randomizeEmitters();
+    glSetViewport(rect.width, rect.height, dpr);
+  }
+  function buildShape(){
+    const W=glCanvas.width/S.dpr, H=glCanvas.height/S.dpr, cx=W/2, cy=H/2, margin=16;
+    if(S.polygonType==='circle'){ S.isCircle=true; S.circle={cx,cy,R:Math.min(W,H)/2-margin}; S.vertices=[]; return; }
+    S.isCircle=false;
+    if(S.polygonType==='random'){
+      const n=S.sides||5, verts=[];
+      for(let i=0;i<n;i++){ const base=i*2*Math.PI/n; const a=base+(rand()*2-1)*(Math.PI/n*0.45); const r=0.9*(0.8+0.3*rand()); verts.push({x:r*Math.cos(a),y:r*Math.sin(a)}); }
+      let minX=1e9,minY=1e9,maxX=-1e9,maxY=-1e9; for(const p of verts){ if(p.x<minX)minX=p.x; if(p.x>maxX)maxX=p.x; if(p.y<minY)minY=p.y; if(p.y>maxY)maxY=p.y; }
+      const scale = 0.98*Math.min((W-2*margin)/(maxX-minX),(H-2*margin)/(maxY-minY));
+      for(const p of verts){ p.x=p.x*scale+cx; p.y=p.y*scale+cy; }
+      S.vertices=verts; return;
+    }
+    if(S.polygonType==='blob'){
+      const steps=720, L=3, amp=0.06, ph1=rand()*6.28, ph2=rand()*6.28, ph3=rand()*6.28, R=Math.min(W,H)/2-margin, out=[];
+      for(let i=0;i<steps;i++){ const a=-Math.PI/2 + i*2*Math.PI/steps; const f=1+amp*(0.7*Math.cos(L*a+ph1)+0.4*Math.cos((L+1)*a+ph2)+0.3*Math.cos((L-1)*a+ph3)); out.push({x:cx+R*f*Math.cos(a), y:cy+R*f*Math.sin(a)}); }
+      S.vertices=out; return;
+    }
+    // regular
+    const n=S.sides||5, R=Math.min(W,H)/2-margin, verts=[]; for(let i=0;i<n;i++){ const a=-Math.PI/2 + i*2*Math.PI/n; verts.push({x:cx+R*Math.cos(a),y:cy+R*Math.sin(a)}); } S.vertices=verts;
+  }
+  function centroid(v){ let x=0,y=0; for(const p of v){ x+=p.x;y+=p.y; } return {x:x/v.length,y:y/v.length}; }
+  function pointInPoly(pt,vs){ let ins=false; const x=pt.x,y=pt.y; for(let i=0,j=vs.length-1;i<vs.length;j=i++){ const xi=vs[i].x,yi=vs[i].y,xj=vs[j].x,yj=vs[j].y; const inter=((yi>y)!=(yj>y))&&(x<(xj-xi)*(y-yi)/(yj-yi+1e-9)+xi); if(inter) ins=!ins; } return ins; }
+  function randomPointInRoom(){
+    if(S.isCircle){ const r=S.circle.R*Math.sqrt(rand()); const a=rand()*Math.PI*2; return {x:S.circle.cx+r*Math.cos(a), y:S.circle.cy+r*Math.sin(a)}; }
+    // polygon: rejection in bbox
+    const vs=S.vertices; if(!vs.length) return {x:glCanvas.width/(2*S.dpr), y:glCanvas.height/(2*S.dpr)};
+    let minX=1e9,minY=1e9,maxX=-1e9,maxY=-1e9; for(const p of vs){ if(p.x<minX)minX=p.x; if(p.x>maxX)maxX=p.x; if(p.y<minY)minY=p.y; if(p.y>maxY)maxY=p.y; }
+    for(let k=0;k<1000;k++){ const x=minX+rand()*(maxX-minX), y=minY+rand()*(maxY-minY); const pt={x,y}; if(pointInPoly(pt,vs)) return pt; }
+    return centroid(vs);
+  }
+  function randomizeEmitters(){
+    for(let i=0;i<S.emitters.length;i++){ S.emitters[i]=randomPointInRoom(); }
+  }
+
+  // intersections
+  function raySegIntersection(o,d,a,b){
+    const v=sub(b,a), w=sub(a,o), denom=cross(d,v);
+    if(Math.abs(denom)<1e-9) return null;
+    const t=(w.x*v.y-w.y*v.x)/denom, u=(w.x*d.y-w.y*d.x)/denom;
+    if(t>1e-4 && u>=0 && u<=1) return {point:{x:o.x+d.x*t,y:o.y+d.y*t}, t, a, b};
+    return null;
+  }
+  function firstHitPoly(o,d,verts){ let best=null,bestT=1e20; for(let i=0;i<verts.length;i++){ const a=verts[i], b=verts[(i+1)%verts.length]; const h=raySegIntersection(o,d,a,b); if(h && h.t<bestT){ best=h; bestT=h.t; } } return best; }
+  function firstHitCircle(o,d,c){
+    const ox=o.x-c.cx, oy=o.y-c.cy; const b=ox*d.x+oy*d.y; const c0=ox*ox+oy*oy-c.R*c.R; const disc=b*b-c0;
+    if(disc<1e-9) return null; const s=Math.sqrt(disc); const t1=-b-s, t2=-b+s; let t=null; if(t1>1e-4) t=t1; else if(t2>1e-4) t=t2; if(t==null) return null;
+    return {point:{x:o.x+d.x*t,y:o.y+d.y*t}, t};
+  }
+  function computePath(origin,dir){
+    let o={...origin}, d=norm(dir), intensity=1, segs=[], i=0, cum=0;
+    for(; i<S.maxBounces && intensity>0.01; i++){
+      const hit = S.isCircle ? firstHitCircle(o,d,S.circle) : firstHitPoly(o,d,S.vertices);
+      if(!hit) break;
+      const to=hit.point; const len=Math.hypot(to.x-o.x,to.y-o.y);
+      segs.push({from:o,to,len,cum,intensity});
+      cum+=len;
+      if(S.isCircle){
+        const n=norm({x:to.x-S.circle.cx,y:to.y-S.circle.cy}); d=reflectByNormal(d,n);
+      } else {
+        const e=sub(hit.b,hit.a); const n=norm({x:-e.y,y:e.x}); d=reflectByNormal(d,n);
+      }
+      intensity *= S.reflectivity; o={x:to.x+d.x*0.02,y:to.y+d.y*0.02};
+    }
+    return segs;
+  }
+
+  // Performance: cache computePath results when geometry/settings haven't changed
+  function computePathCached(origin, dir, cacheKey) {
+    const key = `${origin.x.toFixed(1)},${origin.y.toFixed(1)},${dir.x.toFixed(3)},${dir.y.toFixed(3)},${cacheKey}`;
+    if (S.pathCache.has(key)) {
+      return S.pathCache.get(key);
+    }
+    const result = computePath(origin, dir);
+    if (S.pathCache.size > 1000) S.pathCache.clear(); // Prevent memory leaks
+    S.pathCache.set(key, result);
+    return result;
+  }
+
+  function generateCacheKey() {
+    return `${S.polygonType},${S.sides},${S.maxBounces},${S.reflectivity.toFixed(3)},${S.circle.cx},${S.circle.cy},${S.circle.R}`;
+  }
+
+  // reflectivity easing
+  function updateReflect(){ const x=parseFloat(reflectEl.value)||0; const gamma=3.2; S.reflectSlider=x; S.reflectivity = 1 - Math.pow(1-x, gamma); }
+
+  // ---- WebGL (beams) ----
+  let gl, prog, buf, a_pos, a_t, a_col, a_alpha, a_gradPos, u_res, u_time, u_freqPx, u_speed, u_amp, u_shape, u_soft, u_pulseOn;
+  function glInit(){
+    gl = glCanvas.getContext('webgl2', {antialias:true, alpha:false});
+    if(!gl){ alert('WebGL2 not available'); return; }
+    const vs = `#version 300 es
+precision highp float;
+in vec2 a_pos; 
+in float a_t; 
+in vec3 a_col; 
+in float a_alpha;
+in float a_gradPos; // New: position across beam width (0=edge, 1=center, 0=edge)
+uniform vec2 u_res;
+out float v_t; 
+out vec3 v_col; 
+out float v_alpha;
+out float v_gradPos;
+void main(){ 
+  vec2 clip=(a_pos/u_res)*2.0-1.0; 
+  clip.y=-clip.y; 
+  gl_Position=vec4(clip,0.0,1.0); 
+  v_t=a_t; v_col=a_col; v_alpha=a_alpha; v_gradPos=a_gradPos;
+}`;
+    const fs = `#version 300 es
+precision highp float;
+in float v_t; 
+in vec3 v_col; 
+in float v_alpha;
+in float v_gradPos; // Gradient position across beam width
+uniform float u_time,u_freqPx,u_speed,u_amp,u_shape,u_soft,u_pulseOn;
+out vec4 outColor;
+void main(){ 
+  float a=v_alpha; 
+  if(u_pulseOn>0.5){ 
+    float s=sin(6.2831853*u_freqPx*(v_t-u_speed*u_time)); 
+    float f=(u_shape<0.5)?(0.5+0.5*s):smoothstep(-u_soft,u_soft,s); 
+    a*=(1.0-u_amp)+u_amp*f; 
+  }
+  // Gradient shading: create smooth falloff from center (1.0) to edges (0.0)
+  float gradient = 1.0 - abs(v_gradPos - 0.5) * 2.0; // Convert 0->1->0 to 0->1
+  gradient = smoothstep(0.0, 1.0, gradient); // Smooth the gradient
+  a *= gradient; // Apply gradient to alpha
+  outColor=vec4(v_col, a); 
+}`;
+    const V = gl.createShader(gl.VERTEX_SHADER); gl.shaderSource(V,vs); gl.compileShader(V);
+    const F = gl.createShader(gl.FRAGMENT_SHADER); gl.shaderSource(F,fs); gl.compileShader(F);
+    prog = gl.createProgram(); gl.attachShader(prog,V); gl.attachShader(prog,F); gl.linkProgram(prog);
+    a_pos = gl.getAttribLocation(prog,'a_pos'); a_t = gl.getAttribLocation(prog,'a_t'); a_col = gl.getAttribLocation(prog,'a_col'); a_alpha = gl.getAttribLocation(prog,'a_alpha'); a_gradPos = gl.getAttribLocation(prog,'a_gradPos');
+    u_res = gl.getUniformLocation(prog,'u_res'); u_time=gl.getUniformLocation(prog,'u_time'); u_freqPx=gl.getUniformLocation(prog,'u_freqPx'); u_speed=gl.getUniformLocation(prog,'u_speed'); u_amp=gl.getUniformLocation(prog,'u_amp'); u_shape=gl.getUniformLocation(prog,'u_shape'); u_soft=gl.getUniformLocation(prog,'u_soft'); u_pulseOn=gl.getUniformLocation(prog,'u_pulseOn');
+    buf = gl.createBuffer(); gl.enable(gl.BLEND); gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+  }
+  function glSetViewport(viewW, viewH, dpr){ gl.viewport(0,0,Math.floor(viewW*dpr),Math.floor(viewH*dpr)); }
+
+  function pushQuad(arr, x0,y0, x1,y1, halfW, t0, t1, rgb, alpha){
+    const dx=x1-x0, dy=y1-y0; const L=Math.hypot(dx,dy)||1; const nx=-dy/L, ny=dx/L;
+    const lx0=x0+nx*halfW, ly0=y0+ny*halfW, rx0=x0-nx*halfW, ry0=y0-ny*halfW;
+    const lx1=x1+nx*halfW, ly1=y1+ny*halfW, rx1=x1-nx*halfW, ry1=y1-ny*halfW;
+    // New: include gradient position (0=edge, 0.5=center, 1=edge)
+    const pushV=(x,y,t,gradPos)=>{ arr.push(x,y,t, rgb[0],rgb[1],rgb[2], alpha, gradPos); };
+    pushV(lx0,ly0,t0,0.0); pushV(lx1,ly1,t1,0.0); pushV(rx0,ry0,t0,1.0);
+    pushV(rx0,ry0,t0,1.0); pushV(lx1,ly1,t1,0.0); pushV(rx1,ry1,t1,1.0);
+  }
+
+  function hslToRgbArr(hsl){ return hslToRgb(hsl.h,hsl.s,hsl.l); }
+
+  function renderBeamsGL(timeSec){
+    gl.useProgram(prog);
+    gl.uniform2f(u_res, glCanvas.width/S.dpr, glCanvas.height/S.dpr);
+    gl.uniform1f(u_time, timeSec);
+    gl.uniform1f(u_pulseOn, S.pulseOn ? 1 : 0);
+    gl.uniform1f(u_freqPx, S.pulseFreqCP100 / 100);
+    gl.uniform1f(u_speed, S.pulseSpeed);
+    gl.uniform1f(u_amp, S.pulseAmp);
+    gl.uniform1f(u_shape, S.pulseShape==='square'? 1.0 : 0.0);
+    gl.uniform1f(u_soft, S.pulseSoft);
+
+    // Set blend mode based on glow settings
+    if(S.glowBlend === 'add') {
+      gl.blendFunc(gl.ONE, gl.ONE);
+    } else if(S.glowBlend === 'screen') {
+      gl.blendFunc(gl.ONE_MINUS_DST_COLOR, gl.ONE);
+    } else {
+      gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+    }
+
+    gl.clearColor(0.06,0.07,0.1,1); gl.clear(gl.COLOR_BUFFER_BIT);
+
+    const base = S.angleDeg*Math.PI/180;
+    const spread = (S.spreadDeg||0)*Math.PI/180;
+    const n = S.beamCount|0;
+    let totalSegs = 0;
+
+    // Performance: Generate cache key once per frame
+    const currentCacheKey = generateCacheKey();
+    if (currentCacheKey !== S.cacheKey) {
+      S.pathCache.clear(); // Clear cache when geometry changes
+      S.cacheKey = currentCacheKey;
+    }
+
+    // Render multiple glow layers for spectacular effect
+    const layers = Math.max(1, S.glowLayers);
+    for(let layer = layers; layer > 0; layer--) {
+      const verts = [];
+      const layerIntensity = layer === 1 ? S.glowCore : S.glowIntensity / layer;
+      const layerWidth = (S.beamWidth||2) * (layer === 1 ? 0.5 : S.glowSpread * layer * 0.5);
+      const half = layerWidth/2;
+
+      for(let em=0; em<S.emitters.length; em++){
+        const E = S.emitters[em];
+        for(let i=0;i<n;i++){
+          const off = (n===1)?0:(i/(n-1)-0.5);
+          const ang = base + off*spread + (S.perBeamPhase[i]||0)*Math.PI/180;
+          const dir = {x:Math.cos(ang), y:Math.sin(ang)};
+          // Use cached path computation for performance
+          const segs = computePathCached(E, dir, currentCacheKey);
+          if(layer === layers) totalSegs += segs.length;
+          const rgb = hslToRgbArr(S.beamPalette[i % S.beamPalette.length]);
+          for(const s of segs){
+            const alpha = s.intensity * layerIntensity * (layer === 1 ? 1 : 0.3);
+            pushQuad(verts, s.from.x, s.from.y, s.to.x, s.to.y, half, s.cum, s.cum + s.len, rgb, alpha);
+          }
+        }
+      }
+
+      if(verts.length > 0) {
+        const data = new Float32Array(verts);
+        gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+        gl.bufferData(gl.ARRAY_BUFFER, data, gl.DYNAMIC_DRAW);
+
+        const stride = 8*4; // Now 8 floats per vertex (added gradPos)
+        gl.enableVertexAttribArray(a_pos); gl.vertexAttribPointer(a_pos, 2, gl.FLOAT, false, stride, 0);
+        gl.enableVertexAttribArray(a_t); gl.vertexAttribPointer(a_t, 1, gl.FLOAT, false, stride, 2*4);
+        gl.enableVertexAttribArray(a_col); gl.vertexAttribPointer(a_col, 3, gl.FLOAT, false, stride, 3*4);
+        gl.enableVertexAttribArray(a_alpha); gl.vertexAttribPointer(a_alpha, 1, gl.FLOAT, false, stride, 6*4);
+        gl.enableVertexAttribArray(a_gradPos); gl.vertexAttribPointer(a_gradPos, 1, gl.FLOAT, false, stride, 7*4);
+
+        gl.drawArrays(gl.TRIANGLES, 0, data.length/8);
+      }
+    }
+
+    S.lastSegments = totalSegs;
+  }
+
+  // ---- Overlay (boundary + emitters) ----
+  function drawOverlay(){
+    const W=ovCanvas.width/S.dpr, H=ovCanvas.height/S.dpr;
+    octx.setTransform(S.dpr,0,0,S.dpr,0,0);
+    octx.clearRect(0,0,W,H);
+
+    // boundary
+    octx.strokeStyle='#2b2f36'; octx.lineWidth=2;
+    octx.beginPath();
+    if(S.isCircle){ octx.arc(S.circle.cx,S.circle.cy,S.circle.R,0,Math.PI*2); }
+    else { const v=S.vertices; if(v.length){ octx.moveTo(v[0].x,v[0].y); for(let i=1;i<v.length;i++) octx.lineTo(v[i].x,v[i].y); octx.closePath(); } }
+    octx.stroke();
+
+    // emitters
+    for(const e of S.emitters){ octx.fillStyle='#8a93a3'; octx.strokeStyle='#1b1f26'; octx.lineWidth=1.5; octx.beginPath(); octx.arc(e.x,e.y,4,0,Math.PI*2); octx.fill(); octx.stroke(); }
+
+    document.getElementById('bouncesTag').textContent = 'Bounces: '+S.lastSegments;
+  }
+
+  // ---- Interaction ----
+  ovCanvas.addEventListener('pointerdown', (e)=>{
+    const r=ovCanvas.getBoundingClientRect(), x=e.clientX-r.left, y=e.clientY-r.top;
+    let idx=-1, best=9999;
+    for(let i=0;i<S.emitters.length;i++){
+      const d=Math.hypot(x - S.emitters[i].x, y - S.emitters[i].y);
+      if(d<16 && d<best){ best=d; idx=i; }
+    }
+    if(idx>=0){ S.draggingIdx = idx; ovCanvas.setPointerCapture(e.pointerId); }
+  });
+  ovCanvas.addEventListener('pointermove',(e)=>{
+    if(S.draggingIdx<0) return;
+    const r=ovCanvas.getBoundingClientRect(), x=e.clientX-r.left, y=e.clientY-r.top;
+    S.emitters[S.draggingIdx] = {x,y};
+  });
+  ovCanvas.addEventListener('pointerup',()=> S.draggingIdx=-1);
+
+  // ---- Bindings ----
+  function setShapeFromSelect(){
+    const v=shapeSel.value;
+    if(v==='circle'){ S.polygonType='circle'; }
+    else if(v.startsWith('regular-')){ S.polygonType='regular'; S.sides=parseInt(v.split('-')[1],10)||5; }
+    else if(v.startsWith('random-')){ S.polygonType='random'; S.sides=parseInt(v.split('-')[1],10)||5; }
+    else { S.polygonType='blob'; }
+    buildShape(); randomizeEmitters();
+  }
+  shapeSel.addEventListener('change', setShapeFromSelect);
+  reflectEl.addEventListener('input', updateReflect);
+  bouncesEl.addEventListener('input', ()=>{ const v=parseInt(bouncesEl.value,10)||1; S.maxBounces=v; bouncesNumEl.value=v; });
+  bouncesNumEl.addEventListener('input', ()=>{ const v=parseInt(bouncesNumEl.value,10)||1; S.maxBounces=v; bouncesEl.value=v; });
+  widthEl.addEventListener('input', ()=> S.beamWidth=parseInt(widthEl.value,10)||2);
+  const syncCount=(v)=>{ v=clamp(v,1,24)|0; S.beamCount=v; countEl.value=v; countNumEl.value=v; ensureSpeedArrays(v); if(S.primeMode) applyPrimeSpeeds(S.primeMode); rebuildBeamSpeedInputs(); if(S.beamScheme!=='custom'){ S.beamPalette=generatePalette(S.beamScheme); } ensurePaletteSize(v); rebuildBeamSwatches(); };
+  countEl.addEventListener('input', ()=> syncCount(parseInt(countEl.value,10)||1));
+  countNumEl.addEventListener('input', ()=> syncCount(parseInt(countNumEl.value,10)||1));
+
+  emCountEl.addEventListener('input', ()=>{
+    const n = clamp(parseInt(emCountEl.value,10)||1,1,4);
+    while(S.emitters.length<n) S.emitters.push({...S.emitters[S.emitters.length-1]||{x:0,y:0}});
+    if(S.emitters.length>n) S.emitters.length=n;
+    randomizeEmitters();
+  });
+  centerEmittersBtn.addEventListener('click', ()=>{ const c=S.isCircle?{x:S.circle.cx,y:S.circle.cy}:centroid(S.vertices); for(let i=0;i<S.emitters.length;i++) S.emitters[i]={x:c.x+(i-(S.emitters.length-1)/2)*14,y:c.y}; });
+
+  spreadEl.addEventListener('input', ()=>{ S.spreadDeg=parseFloat(spreadEl.value)||0; spreadNumEl.value=S.spreadDeg.toFixed(1); });
+  spreadNumEl.addEventListener('input', ()=>{ const v=clamp(parseFloat(spreadNumEl.value)||0,0,180); S.spreadDeg=v; spreadEl.value=v; });
+  angleEl.addEventListener('input', ()=> S.angleDeg=parseFloat(angleEl.value)||0);
+  rotSpeedEl.addEventListener('input', ()=>{ S.rotationSpeed=parseFloat(rotSpeedEl.value)||0; rotSpeedNum.value=S.rotationSpeed.toFixed(2); });
+  rotSpeedNum.addEventListener('input', ()=>{ const v=clamp(parseFloat(rotSpeedNum.value)||0,0,S.speedMax); S.rotationSpeed=v; rotSpeedEl.value=v; });
+  speedRangeEl.addEventListener('change', ()=>{ const m=parseFloat(speedRangeEl.value)||5; setSpeedMax(m); ensureSpeedArrays(S.beamCount); if(S.primeMode) applyPrimeSpeeds(S.primeMode); rebuildBeamSpeedInputs(); });
+  speedMultiplierEl.addEventListener('input', ()=>{ S.speedMultiplier=parseFloat(speedMultiplierEl.value)||0; speedMultiplierNumEl.value=S.speedMultiplier.toFixed(2); });
+  speedMultiplierNumEl.addEventListener('input', ()=>{ const v=clamp(parseFloat(speedMultiplierNumEl.value)||0,0,2); S.speedMultiplier=v; speedMultiplierEl.value=v; });
+
+  beamSchemeEl.addEventListener('change', ()=>{ S.beamScheme=beamSchemeEl.value; S.beamPalette=generatePalette(S.beamScheme); rebuildBeamSwatches(); });
+  shuffleSchemeBtn.addEventListener('click', ()=>{ S.seed=(Math.random()*1e9)|0; if(S.beamScheme==='custom'){ S.beamScheme='random'; beamSchemeEl.value='random'; } S.beamPalette=generatePalette(S.beamScheme); rebuildBeamSwatches(); });
+
+  fillPrimesRawBtn.addEventListener('click', ()=> applyPrimeSpeeds('raw'));
+  fillPrimesScaledBtn.addEventListener('click', ()=> applyPrimeSpeeds('scaled'));
+  resetPhasesBtn.addEventListener('click', resetPhases);
+
+  pulseEnableEl.addEventListener('change', ()=> S.pulseOn = (pulseEnableEl.value==='on'));
+  pulseShapeEl.addEventListener('change', ()=> S.pulseShape=pulseShapeEl.value);
+  pulseAmpEl.addEventListener('input', ()=> S.pulseAmp=parseFloat(pulseAmpEl.value)||0);
+  pulseFreqEl.addEventListener('input', ()=> S.pulseFreqCP100=parseFloat(pulseFreqEl.value)||1.2);
+  pulseSpeedEl.addEventListener('input', ()=> S.pulseSpeed=parseFloat(pulseSpeedEl.value)||0);
+  pulseQualityEl.addEventListener('input', ()=> S.pulseSoft=parseFloat(pulseQualityEl.value)||0.18);
+
+  glowLayersEl.addEventListener('change', ()=> S.glowLayers=parseInt(glowLayersEl.value,10)||0);
+  glowIntensityEl.addEventListener('input', ()=> S.glowIntensity=parseFloat(glowIntensityEl.value)||1);
+  glowSpreadEl.addEventListener('input', ()=> S.glowSpread=parseFloat(glowSpreadEl.value)||1);
+  glowCoreEl.addEventListener('input', ()=> S.glowCore=parseFloat(glowCoreEl.value)||1);
+  glowBlendEl.addEventListener('change', ()=> S.glowBlend=glowBlendEl.value);
+  bloomEffectEl.addEventListener('change', ()=> S.bloomEffect=bloomEffectEl.value);
+
+  shuffleShapeBtn.addEventListener('click', ()=>{ if(S.polygonType==='circle') return; if(S.polygonType==='random' || S.polygonType==='blob') S.seed=(Math.random()*1e9)|0; buildShape(); randomizeEmitters(); });
+
+  // Presets
+  function currentPreset(){
+    return {
+      polygonType:S.polygonType, sides:S.sides, beamWidth:S.beamWidth,
+      reflectSlider:S.reflectSlider, maxBounces:S.maxBounces,
+      beamCount:S.beamCount, spreadDeg:S.spreadDeg, angleDeg:S.angleDeg,
+      rotationSpeed:S.rotationSpeed, speedMax:S.speedMax, speedMultiplier:S.speedMultiplier,
+      emitters:S.emitters, beamScheme:S.beamScheme, beamPalette:S.beamPalette,
+      perBeamSpeed:S.perBeamSpeed, perBeamPhase:S.perBeamPhase,
+      pulse:{on:S.pulseOn, shape:S.pulseShape, amp:S.pulseAmp, freq:S.pulseFreqCP100, speed:S.pulseSpeed, soft:S.pulseSoft},
+      glow:{layers:S.glowLayers, intensity:S.glowIntensity, spread:S.glowSpread, core:S.glowCore, blend:S.glowBlend, bloom:S.bloomEffect}
+    };
+  }
+  function applyPreset(P){
+    Object.assign(S, {
+      polygonType:P.polygonType||'circle',
+      sides:P.sides||S.sides,
+      beamWidth:P.beamWidth||S.beamWidth,
+      reflectSlider:('reflectSlider' in P)?P.reflectSlider:S.reflectSlider,
+      maxBounces:P.maxBounces||S.maxBounces,
+      beamCount:P.beamCount||S.beamCount,
+      spreadDeg:('spreadDeg' in P)?P.spreadDeg:S.spreadDeg,
+      angleDeg:('angleDeg' in P)?P.angleDeg:S.angleDeg,
+      rotationSpeed:('rotationSpeed' in P)?P.rotationSpeed:S.rotationSpeed,
+      speedMax:('speedMax' in P)?P.speedMax:S.speedMax,
+      speedMultiplier:('speedMultiplier' in P)?P.speedMultiplier:S.speedMultiplier,
+      emitters:P.emitters||S.emitters,
+      beamScheme:P.beamScheme||S.beamScheme,
+      beamPalette:P.beamPalette||S.beamPalette,
+      perBeamSpeed:P.perBeamSpeed||S.perBeamSpeed,
+      perBeamPhase:P.perBeamPhase||S.perBeamPhase
+    });
+    if(P.pulse){ S.pulseOn=!!P.pulse.on; S.pulseShape=P.pulse.shape||'sine'; S.pulseAmp=P.pulse.amp||0; S.pulseFreqCP100=P.pulse.freq||1; S.pulseSpeed=P.pulse.speed||0; S.pulseSoft=P.pulse.soft||0.18; }
+    if(P.glow){ S.glowLayers=P.glow.layers||2; S.glowIntensity=P.glow.intensity||1.5; S.glowSpread=P.glow.spread||3; S.glowCore=P.glow.core||1.2; S.glowBlend=P.glow.blend||'add'; S.bloomEffect=P.glow.bloom||'off'; }
+    // sync UI
+    shapeSel.value = S.polygonType==='circle' ? 'circle' : (S.polygonType==='random' ? 'random-'+(S.sides||5) : (S.polygonType==='blob' ? 'blob' : ('regular-'+(S.sides||5))));
+    reflectEl.value = S.reflectSlider; updateReflect();
+    bouncesEl.value = bouncesNumEl.value = S.maxBounces;
+    widthEl.value = S.beamWidth;
+    countEl.value = countNumEl.value = S.beamCount;
+    emCountEl.value = S.emitters.length;
+    spreadEl.value = S.spreadDeg; spreadNumEl.value = S.spreadDeg.toFixed(1);
+    angleEl.value = S.angleDeg;
+    setSpeedMax(S.speedMax);
+    rotSpeedEl.value = rotSpeedNum.value = S.rotationSpeed;
+    speedMultiplierEl.value = speedMultiplierNumEl.value = S.speedMultiplier;
+    beamSchemeEl.value = S.beamScheme;
+    rebuildBeamSwatches(); ensureSpeedArrays(S.beamCount); rebuildBeamSpeedInputs();
+    pulseEnableEl.value = S.pulseOn? 'on':'off';
+    pulseShapeEl.value = S.pulseShape; pulseAmpEl.value = S.pulseAmp; pulseFreqEl.value = S.pulseFreqCP100; pulseSpeedEl.value=S.pulseSpeed; pulseQualityEl.value=S.pulseSoft;
+    glowLayersEl.value = S.glowLayers; glowIntensityEl.value = S.glowIntensity; glowSpreadEl.value = S.glowSpread; glowCoreEl.value = S.glowCore; glowBlendEl.value = S.glowBlend; bloomEffectEl.value = S.bloomEffect;
+    buildShape(); randomizeEmitters();
+  }
+  document.getElementById('savePreset').addEventListener('click', ()=>{
+    const blob = new Blob([JSON.stringify(currentPreset(),null,2)], {type:'application/json'});
+    const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download='laser-room-preset.json'; a.click(); setTimeout(()=>URL.revokeObjectURL(a.href),1000);
+  });
+  document.getElementById('loadPreset').addEventListener('click', ()=> presetFile.click());
+  presetFile.addEventListener('change', async ()=>{ const f=presetFile.files[0]; if(!f) return; const txt=await f.text(); try{ const P=JSON.parse(txt); applyPreset(P); }catch(e){ alert('Invalid preset JSON'); } });
+
+  // Spectacular presets
+  document.getElementById('presetSpectacular').addEventListener('click', ()=> {
+    applyPreset({
+      polygonType:'circle', beamWidth:3, reflectSlider:0.85, maxBounces:12, beamCount:8, spreadDeg:25, rotationSpeed:0.5,
+      speedMax:30, emitters:[{x:0,y:0}], beamScheme:'rainbow', perBeamSpeed:[2,3,5,7,11,13,17,19], perBeamPhase:[0,0,0,0,0,0,0,0],
+      pulse:{on:true, shape:'sine', amp:0.8, freq:2, speed:180, soft:0.15},
+      glow:{layers:3, intensity:2.5, spread:4, core:1.8, blend:'add', bloom:'dramatic'}
+    });
+  });
+
+  document.getElementById('presetSubtle').addEventListener('click', ()=> {
+    applyPreset({
+      polygonType:'regular-6', beamWidth:2, reflectSlider:0.75, maxBounces:8, beamCount:4, spreadDeg:15, rotationSpeed:0.2,
+      speedMax:15, emitters:[{x:0,y:0}], beamScheme:'cool', perBeamSpeed:[1,2,3,5], perBeamPhase:[0,0,0,0],
+      pulse:{on:false, shape:'sine', amp:0, freq:1, speed:0, soft:0.18},
+      glow:{layers:2, intensity:1.2, spread:2.5, core:1.1, blend:'normal', bloom:'subtle'}
+    });
+  });
+
+  document.getElementById('presetRainbow').addEventListener('click', ()=> {
+    applyPreset({
+      polygonType:'circle', beamWidth:4, reflectSlider:0.9, maxBounces:15, beamCount:12, spreadDeg:360, rotationSpeed:1.2,
+      speedMax:60, emitters:[{x:0,y:0}], beamScheme:'rainbow', perBeamSpeed:[2,3,5,7,11,13,17,19,23,29,31,37], perBeamPhase:[0,30,60,90,120,150,180,210,240,270,300,330],
+      pulse:{on:true, shape:'sine', amp:1, freq:1.5, speed:300, soft:0.1},
+      glow:{layers:3, intensity:2.8, spread:5, core:2, blend:'add', bloom:'dramatic'}
+    });
+  });
+
+  document.getElementById('presetCyberpunk').addEventListener('click', ()=> {
+    applyPreset({
+      polygonType:'regular-4', beamWidth:2, reflectSlider:0.95, maxBounces:20, beamCount:6, spreadDeg:45, rotationSpeed:0.8,
+      speedMax:45, emitters:[{x:0,y:0}], beamScheme:'custom', 
+      beamPalette:[{h:180,s:100,l:50},{h:300,s:100,l:50},{h:60,s:100,l:50},{h:120,s:100,l:50},{h:0,s:100,l:50},{h:240,s:100,l:50}],
+      perBeamSpeed:[7,11,13,17,19,23], perBeamPhase:[0,0,0,0,0,0],
+      pulse:{on:true, shape:'square', amp:0.9, freq:3, speed:400, soft:0.05},
+      glow:{layers:3, intensity:3, spread:3.5, core:2.2, blend:'add', bloom:'dramatic'}
+    });
+  });
+
+  // ---- Main loop ----
+  let last=performance.now(), fpsA=0, fpsN=0, lastRender=0;
+  function loop(t){
+    const dt=t-last; last=t; 
+    
+    // Performance: Limit frame rate on complex scenes
+    const targetFPS = S.glowLayers > 2 && S.lastSegments > 100 ? 30 : 60;
+    const frameInterval = 1000 / targetFPS;
+    if (t - lastRender < frameInterval) {
+      requestAnimationFrame(loop);
+      return;
+    }
+    lastRender = t;
+    
+    fpsA+=dt; fpsN++; if(fpsA>=1000){ fpsTag.textContent=`FPS: ${fpsN} (${S.lastSegments} segs)`; fpsA=0; fpsN=0; }
+    if(S.rotationSpeed>0){ S.angleDeg=(S.angleDeg + S.rotationSpeed*dt/1000)%360; angleEl.value=S.angleDeg.toFixed(1); }
+    for(let i=0;i<S.perBeamPhase.length;i++){ S.perBeamPhase[i]=(S.perBeamPhase[i] + (S.perBeamSpeed[i]||0)*S.speedMultiplier*dt/1000)%360; }
+    
+    renderBeamsGL(t/1000);
+    drawOverlay();
+    requestAnimationFrame(loop);
+  }
+
+  // ---- Renderer (fixed res, high bitrate) ----
+  let recMedia=null, recChunks=[], recStream=null, renderRunning=false;
+  async function startRenderer(){
+    if(renderRunning) return;
+    const m = /^(\d+)\s*x\s*(\d+)$/i.exec(renSizeEl.value.trim());
+    const W = m ? parseInt(m[1],10) : 1920;
+    const H = m ? parseInt(m[2],10) : 1080;
+    const fps = clamp(parseInt(renFpsEl.value,10)||60,1,120);
+    const secs = clamp(parseInt(renSecsEl.value,10)||8,1,600);
+
+    const g = document.createElement('canvas'); g.width=W; g.height=H;
+    const o = document.createElement('canvas'); o.width=W; o.height=H;
+    const go = g.getContext('webgl2', {antialias:true, alpha:false});
+    const oo = o.getContext('2d');
+
+    function mkProg(gl, vsSrc, fsSrc){ const V=gl.createShader(gl.VERTEX_SHADER); gl.shaderSource(V,vsSrc); gl.compileShader(V); const F=gl.createShader(gl.FRAGMENT_SHADER); gl.shaderSource(F,fsSrc); gl.compileShader(F); const P=gl.createProgram(); gl.attachShader(P,V); gl.attachShader(P,F); gl.linkProgram(P); return {P,V,F}; }
+    const vsSrc = `#version 300 es
+precision highp float;
+in vec2 a_pos; in float a_t; in vec3 a_col; in float a_alpha; in float a_gradPos;
+uniform vec2 u_res;
+out float v_t; out vec3 v_col; out float v_alpha; out float v_gradPos;
+void main(){
+  vec2 clip=(a_pos/u_res)*2.0-1.0; clip.y=-clip.y; gl_Position=vec4(clip,0.0,1.0);
+  v_t=a_t; v_col=a_col; v_alpha=a_alpha; v_gradPos=a_gradPos;
+}`;
+    const fsSrc = `#version 300 es
+precision highp float;
+in float v_t; in vec3 v_col; in float v_alpha; in float v_gradPos;
+uniform float u_time,u_freqPx,u_speed,u_amp,u_shape,u_soft,u_pulseOn;
+out vec4 outColor;
+void main(){
+  float a=v_alpha;
+  if(u_pulseOn>0.5){
+    float s=sin(6.2831853*u_freqPx*(v_t-u_speed*u_time));
+    float f=(u_shape<0.5)?(0.5+0.5*s):smoothstep(-u_soft,u_soft,s);
+    a*=(1.0-u_amp)+u_amp*f;
+  }
+  // Gradient shading for renderer
+  float gradient = 1.0 - abs(v_gradPos - 0.5) * 2.0;
+  gradient = smoothstep(0.0, 1.0, gradient);
+  a *= gradient;
+  outColor=vec4(v_col,a);
+}`;
+    const {P}=mkProg(go,vsSrc,fsSrc);
+    const loc = { a_pos: go.getAttribLocation(P,'a_pos'), a_t: go.getAttribLocation(P,'a_t'), a_col: go.getAttribLocation(P,'a_col'), a_alpha: go.getAttribLocation(P,'a_alpha'), a_gradPos: go.getAttribLocation(P,'a_gradPos'), u_res: go.getUniformLocation(P,'u_res'), u_time: go.getUniformLocation(P,'u_time'), u_freqPx: go.getUniformLocation(P,'u_freqPx'), u_speed: go.getUniformLocation(P,'u_speed'), u_amp: go.getUniformLocation(P,'u_amp'), u_shape: go.getUniformLocation(P,'u_shape'), u_soft: go.getUniformLocation(P,'u_soft'), u_pulseOn: go.getUniformLocation(P,'u_pulseOn') };
+    const bufR = go.createBuffer(); go.enable(go.BLEND); go.blendFunc(go.SRC_ALPHA, go.ONE_MINUS_SRC_ALPHA);
+
+    function pushQuadR(arr, x0,y0, x1,y1, halfW, t0, t1, rgb, alpha){
+      const dx=x1-x0, dy=y1-y0; const L=Math.hypot(dx,dy)||1; const nx=-dy/L, ny=dx/L;
+      const lx0=x0+nx*halfW, ly0=y0+ny*halfW, rx0=x0-nx*halfW, ry0=y0-ny*halfW;
+      const lx1=x1+nx*halfW, ly1=y1+ny*halfW, rx1=x1-nx*halfW, ry1=y1-ny*halfW;
+      const pushV=(x,y,t,gradPos)=>{ arr.push(x,y,t, rgb[0],rgb[1],rgb[2], alpha, gradPos); };
+      pushV(lx0,ly0,t0,0.0); pushV(lx1,ly1,t1,0.0); pushV(rx0,ry0,t0,1.0);
+      pushV(rx0,ry0,t0,1.0); pushV(lx1,ly1,t1,0.0); pushV(rx1,ry1,t1,1.0);
+    }
+
+    function drawFrameGL(timeSec){
+      go.useProgram(P);
+      go.viewport(0,0,W,H);
+      go.uniform2f(loc.u_res,W,H);
+      go.uniform1f(loc.u_time,timeSec);
+      go.uniform1f(loc.u_freqPx,S.pulseFreqCP100/100);
+      go.uniform1f(loc.u_speed,S.pulseSpeed);
+      go.uniform1f(loc.u_amp,S.pulseAmp);
+      go.uniform1f(loc.u_shape, S.pulseShape==='square'?1:0);
+      go.uniform1f(loc.u_soft,S.pulseSoft);
+      go.uniform1f(loc.u_pulseOn,S.pulseOn?1:0);
+
+      // Set blend mode for renderer
+      if(S.glowBlend === 'add') {
+        go.blendFunc(go.ONE, go.ONE);
+      } else if(S.glowBlend === 'screen') {
+        go.blendFunc(go.ONE_MINUS_DST_COLOR, go.ONE);
+      } else {
+        go.blendFunc(go.SRC_ALPHA, go.ONE_MINUS_SRC_ALPHA);
+      }
+
+      go.clearColor(0.06,0.07,0.1,1); go.clear(go.COLOR_BUFFER_BIT);
+
+      const base=S.angleDeg*Math.PI/180, spread=(S.spreadDeg||0)*Math.PI/180, n=S.beamCount|0;
+      const layers = Math.max(1, S.glowLayers);
+      
+      for(let layer = layers; layer > 0; layer--) {
+        const verts=[];
+        const layerIntensity = layer === 1 ? S.glowCore : S.glowIntensity / layer;
+        const layerWidth = (S.beamWidth||2) * (layer === 1 ? 0.5 : S.glowSpread * layer * 0.5);
+        const half = layerWidth/2;
+        
+        for(let em=0; em<S.emitters.length; em++){
+          const E=S.emitters[em];
+          for(let i=0;i<n;i++){
+            const off=(n===1)?0:(i/(n-1)-0.5);
+            const ang=base + off*spread + (S.perBeamPhase[i]||0)*Math.PI/180;
+            const dir={x:Math.cos(ang),y:Math.sin(ang)};
+            const segs=computePathCached(E,dir,S.cacheKey);
+            const col=S.beamPalette[i%S.beamPalette.length]; const rgb=hslToRgb(col.h,col.s,col.l);
+            const kx=W/glCanvas.width, ky=H/glCanvas.height; const ks = W/glCanvas.width;
+            for(const s of segs){ 
+              const alpha = s.intensity * layerIntensity * (layer === 1 ? 1 : 0.3);
+              pushQuadR(verts, s.from.x*kx, s.from.y*ky, s.to.x*kx, s.to.y*ky, half*ks, s.cum*ks, (s.cum+s.len)*ks, rgb, alpha); 
+            }
+          }
+        }
+        
+        if(verts.length > 0) {
+          const data=new Float32Array(verts);
+          go.bindBuffer(go.ARRAY_BUFFER, bufR); go.bufferData(go.ARRAY_BUFFER, data, go.DYNAMIC_DRAW);
+          const stride=8*4; // Now 8 floats per vertex
+          go.enableVertexAttribArray(loc.a_pos); go.vertexAttribPointer(loc.a_pos,2,go.FLOAT,false,stride,0);
+          go.enableVertexAttribArray(loc.a_t); go.vertexAttribPointer(loc.a_t,1,go.FLOAT,false,stride,2*4);
+          go.enableVertexAttribArray(loc.a_col); go.vertexAttribPointer(loc.a_col,3,go.FLOAT,false,stride,3*4);
+          go.enableVertexAttribArray(loc.a_alpha); go.vertexAttribPointer(loc.a_alpha,1,go.FLOAT,false,stride,6*4);
+          go.enableVertexAttribArray(loc.a_gradPos); go.vertexAttribPointer(loc.a_gradPos,1,go.FLOAT,false,stride,7*4);
+          go.drawArrays(go.TRIANGLES,0,data.length/8);
+        }
+      }
+    }
+    function drawOverlay2D(){
+      oo.setTransform(1,0,0,1,0,0); oo.clearRect(0,0,W,H); oo.strokeStyle='#2b2f36'; oo.lineWidth=2; oo.beginPath();
+      if(S.isCircle){ const kx=W/glCanvas.width, ky=H/glCanvas.height; const cx=S.circle.cx*kx, cy=S.circle.cy*ky; const R=S.circle.R*kx; oo.arc(cx,cy,R,0,Math.PI*2); }
+      else { const v=S.vertices; if(v.length){ const kx=W/glCanvas.width, ky=H/glCanvas.height; oo.moveTo(v[0].x*kx,v[0].y*ky); for(let i=1;i<v.length;i++) oo.lineTo(v[i].x*kx,v[i].y*ky); oo.closePath(); } }
+      oo.stroke();
+    }
+
+    const comp = document.createElement('canvas'); comp.width=W; comp.height=H; const cctx = comp.getContext('2d');
+    const fpsTrack = comp.captureStream(fps);
+    recStream = fpsTrack; recChunks = [];
+    const bitrate = Math.round(Math.max(4e6, Math.min(4e7, W*H*fps*0.07))); // 4–40 Mbps
+    const mime = MediaRecorder.isTypeSupported('video/webm;codecs=vp9') ? 'video/webm;codecs=vp9' : 'video/webm;codecs=vp8';
+    recMedia = new MediaRecorder(recStream, {mimeType:mime, videoBitsPerSecond:bitrate});
+    recMedia.ondataavailable = e=>{ if(e.data && e.data.size) recChunks.push(e.data); };
+    recMedia.onstop = ()=>{ const blob = new Blob(recChunks, {type:mime}); const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download='laser-room-render.webm'; a.click(); setTimeout(()=>URL.revokeObjectURL(a.href),1000); renderRunning=false; };
+    recMedia.start();
+
+    renderRunning=true;
+    const dt = 1/fps; let t = 0; const total = secs;
+    function step(){
+      if(!renderRunning){ recMedia.stop(); return; }
+      if(S.rotationSpeed>0) S.angleDeg=(S.angleDeg + S.rotationSpeed*dt)%360;
+      for(let i=0;i<S.perBeamPhase.length;i++) S.perBeamPhase[i] = (S.perBeamPhase[i] + (S.perBeamSpeed[i]||0)*S.speedMultiplier*dt) % 360;
+      drawFrameGL(t); drawOverlay2D(); cctx.drawImage(g,0,0); cctx.drawImage(o,0,0);
+      t += dt; if(t<total) requestAnimationFrame(step); else { recMedia.stop(); }
+    }
+    requestAnimationFrame(step);
+  }
+  function stopRenderer(){ if(renderRunning && recMedia && recMedia.state==='recording'){ renderRunning=false; recMedia.stop(); } }
+  renderStartBtn.addEventListener('click', startRenderer);
+  renderStopBtn.addEventListener('click', stopRenderer);
+
+  // ---- Init ----
+  function init(){
+    glInit();
+    resize(); window.addEventListener('resize', resize);
+    updateReflect();
+    // Random emitter start each load
+    S.emitters = [{x:0,y:0}];
+    randomizeEmitters();
+    S.beamPalette = generatePalette(S.beamScheme); rebuildBeamSwatches();
+    ensureSpeedArrays(S.beamCount); applyPrimeSpeeds('raw'); // default raw primes; raises speedMax automatically
+    rebuildBeamSpeedInputs();
+    requestAnimationFrame(loop);
+  }
+  init();
+
+  // Tiny self-tests
+  (function tests(){
+    const fails=[]; const expect=(ok,msg)=>{ if(!ok) fails.push(msg); };
+    try{
+      S.polygonType='circle'; buildShape(); expect(S.isCircle && S.circle.R>0,'Circle build');
+      const segs = computePath({x:S.circle.cx,y:S.circle.cy},{x:1,y:0}); expect(segs.length>0,'Path segments');
+      const primes = (function(n){const a=[];let x=2;while(a.length<n){let ok=true;for(const p of a){if(p*p>x)break;if(x%p===0){ok=false;break;}}if(ok)a.push(x);x++;}return a;})(7);
+      expect(JSON.stringify(primes)==='[2,3,5,7,11,13,17]','Prime gen');
+      // ensure raw primes lift speedMax
+      S.beamCount=10; ensureSpeedArrays(10); setSpeedMax(5); applyPrimeSpeeds('raw'); expect(S.speedMax>=29,'speedMax raised for raw primes');
+    }catch(e){ fails.push('Self-test crash: '+e.message); }
+    if(fails.length) console.error('❌ Tests:',fails); else console.log('✅ Tests passed');
+  })();
+})();
+</script>
+</body>
+</html>
