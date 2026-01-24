@@ -157,7 +157,7 @@ See mapping table above. Key principle: "don't go overboard" - subtle, low-hangi
 
 ```
 src/
-├── App.tsx                    # Mode switching, shared audio provider
+├── App.tsx                    # Mode switching, subdomain detection, shared audio provider
 ├── shared/
 │   ├── useAdaptiveAudio.ts   # Lifted audio hook (shared between modes)
 │   ├── types.ts              # VisualizationMode, AdaptiveAudioResult
@@ -173,6 +173,16 @@ src/
 │   └── voidulator/
 │       └── Voidulator.tsx    # Laser reflection visualization
 ```
+
+## Deployment & URLs
+
+**Production** (Dell Optiplex via Kamal):
+- `blobulator.fredrikbranstrom.se` → Blobulator mode (default)
+- `voidulator.fredrikbranstrom.se` → Voidulator mode (auto-detected)
+
+**Subdomain detection** (`App.tsx:getInitialMode`): Hostname starting with `voidulator` sets initial mode to Voidulator. Manual switching via UI still works.
+
+**Deploy**: `kamal deploy` (uses Knot registry on Dell, no local Docker needed)
 
 ## Repository
 
