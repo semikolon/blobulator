@@ -8,7 +8,7 @@
 - [x] **Dell wildcard SSL**: Cert obtained via certbot-dns-loopia (expires 2026-04-24, auto-renewal configured)
 - [x] **Dell nginx catch-all**: `/etc/nginx/sites-available/wildcard-fredrikbranstrom` enabled
 - [ ] Update `deploy.yml` to use Knot registry (`registry.fredrikbranstrom.se`) instead of `localhost:5555`
-- [ ] Remove per-project nginx config (`brf-auto`) and verify all subdomains work
+- [x] Remove per-project nginx config (`brf-auto`) - wildcard approach verified working (Jan 24, 2026)
 - [ ] Consider: URL-based mode switching (e.g., `?mode=voidulator`) or subdomain detection to auto-select mode
 
 ## Future Enhancements
