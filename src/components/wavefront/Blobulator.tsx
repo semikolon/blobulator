@@ -211,18 +211,18 @@ const styles = {
     backgroundColor: 'hsla(275, 25%, 22%, 0.7)',
     borderRadius: 16,
     padding: 16,
-    // Muted text - 50% contrast against purple bg
-    color: 'hsla(275, 15%, 65%, 1)',
+    // Purple-pink tinted text
+    color: 'hsla(290, 30%, 70%, 1)',
     fontFamily: 'system-ui, sans-serif',
-    minWidth: 200,
+    width: 250,
     backdropFilter: 'blur(8px)',
   },
   title: {
     fontSize: 20,
     fontWeight: 'bold' as const,
     marginBottom: 12,
-    // Slightly brighter for title
-    color: 'hsla(275, 20%, 75%, 1)',
+    // Brighter purple-pink for title
+    color: 'hsla(295, 40%, 80%, 1)',
   },
   button: {
     padding: '10px 20px',
@@ -232,16 +232,16 @@ const styles = {
     cursor: 'pointer',
     fontSize: 14,
     transition: 'all 0.2s',
-    // Muted button text
-    color: 'hsla(275, 20%, 80%, 1)',
+    // Purple-pink tinted button text
+    color: 'hsla(295, 35%, 85%, 1)',
   },
   buttonStart: {
-    // Colorless - dark with opacity
-    backgroundColor: 'hsla(0, 0%, 100%, 0.15)',
+    // Purple-pink tinted button bg
+    backgroundColor: 'hsla(290, 30%, 50%, 0.25)',
   },
   buttonStop: {
-    // Colorless - slightly brighter when active
-    backgroundColor: 'hsla(0, 0%, 100%, 0.25)',
+    // Slightly brighter when active
+    backgroundColor: 'hsla(290, 35%, 55%, 0.35)',
   },
   error: {
     color: 'hsla(350, 50%, 60%, 1)',
@@ -251,8 +251,8 @@ const styles = {
   stats: {
     marginTop: 12,
     fontSize: 11,
-    // Muted stats text
-    color: 'hsla(275, 15%, 55%, 1)',
+    // Purple-pink tinted stats text
+    color: 'hsla(290, 25%, 65%, 1)',
   },
   meterContainer: {
     marginTop: 12,

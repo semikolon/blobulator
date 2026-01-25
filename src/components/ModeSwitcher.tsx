@@ -35,14 +35,14 @@ const styles = {
     transition: 'all 0.2s ease',
   },
   buttonActive: {
-    // Colorless - white with higher opacity when active
-    backgroundColor: 'hsla(0, 0%, 100%, 0.2)',
-    color: 'hsla(0, 0%, 100%, 0.85)',
+    // Purple-pink tinted when active
+    backgroundColor: 'hsla(290, 30%, 50%, 0.3)',
+    color: 'hsla(295, 35%, 85%, 1)',
   },
   buttonInactive: {
-    // Colorless - very subtle
-    backgroundColor: 'hsla(0, 0%, 100%, 0.08)',
-    color: 'hsla(0, 0%, 100%, 0.45)',
+    // Subtle purple-pink tint when inactive
+    backgroundColor: 'hsla(290, 25%, 40%, 0.15)',
+    color: 'hsla(290, 25%, 65%, 1)',
   },
 };
 
