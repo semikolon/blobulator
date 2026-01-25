@@ -8,6 +8,21 @@ Audio-reactive metaball visualization engine with wavefront expansion animation,
 
 **Working visualization** with unified intensity-based animation, BPM detection, and 6 enhancement phases complete.
 
+### v4 - BPM Pulse & Background Layer (January 25, 2026)
+
+Enhanced BPM reactivity and layered depth:
+
+1. **Beat-Synchronized Pulse** - Blobs pulse in time with detected BPM using exponential decay (sharp attack, smooth release). Each blob has slight phase offset for organic variation.
+2. **Background Blob Layer** - 25 larger (2.5x), darker, slower blobs behind the main field with separate gooey filter (larger blur for dreamlike edges)
+3. **Layered Audio Reactivity** - Background responds to bass (outward push), amplitude (gentle size boost), and BPM (speed modulation) differently than foreground
+4. **Opposite Movement** - Background blobs drift in opposite direction to foreground, creating dynamic visual contrast
+
+**Background layer parameters:**
+- `BG_SIZE_MULTIPLIER: 2.5` (±60% variation)
+- `BG_SPEED_MULTIPLIER: 0.25` (4x slower)
+- `BG_LIGHTNESS_OFFSET: -20` (darker)
+- `BG_GOOEY_BLUR: 24` (softer edges than foreground's 16)
+
 ### v3 - Population & Physics Polish (January 19-22, 2026)
 
 Smooth dynamics and dual-mode architecture:
@@ -90,9 +105,12 @@ Blobs assigned to clusters by ID, creating visual variety:
 |---------------|--------|
 | Amplitude | Size pulse (all blobs, 0.4x boost at max) |
 | Bass | Spawn rate (faster spawning on bass hits) |
+| Bass | Background blob outward push |
 | Mids | Speed boost in expanding mode (0.5x at max) |
 | Mids | Per-blob wobble (different phase per blob) |
 | Bass/Treble | Color hue shift (bass=warm, treble=cool) |
+| **BPM** | **Beat-synchronized size pulse (35% boost, exponential decay)** |
+| **BPM** | **Background layer speed modulation** |
 
 Plus: ±15% individual size variation per blob, breathing effect in drift mode.
 
