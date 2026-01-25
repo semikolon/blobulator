@@ -512,25 +512,107 @@ Visual debugging tool for correlating code events with visual effects. Enable/di
 
 ## Development Notes
 
-### Playwright MCP GPU Acceleration (macOS)
+### Browser MCP Selection (Jan 2026)
 
-Config at `~/.config/playwright-mcp/config.json`. **macOS requires different flags than Linux**:
+**Recommendation**: Use **Chrome DevTools MCP fork** with token optimizations.
+
+**Fork**: https://github.com/semikolon/chrome-devtools-mcp (branch: `feature/token-optimization`)
+**Upstream PR**: https://github.com/ChromeDevTools/chrome-devtools-mcp/pull/833
+
+This fork combines Chrome DevTools MCP's speed/GPU benefits with fast-playwright-mcp's token efficiency:
+- `maxLength` parameter on `take_snapshot` - truncates output
+- `selector` parameter on `take_snapshot` - limits to CSS selector subtree
+- `maxWidth`/`maxHeight` on `take_screenshot` - resizes images
+
+**Key research findings (Jan 2026):**
+
+1. **Chrome DevTools MCP + `--autoConnect`** connects to your normal GPU-enabled Chrome (no Playwright GPU issues)
+
+2. **Playwright WebKit is 2-3x SLOWER than Chromium** - counterintuitive since Safari is fastest natively
+
+3. **Avoid `channel: "chrome"` on Apple Silicon** - can cause x86 vs arm64 architecture issues
+
+Restart Claude Code after config changes (MCP caches config at startup).
+
+### Why Playwright MCP Feels Slow (Animation-Heavy Pages)
+
+**Root cause**: Headed mode rendering overhead, NOT CDP protocol overhead.
+
+> "Headless mode is faster because the browser skips rendering pixels, GPU compositing, and painting frames/animations. Headful mode is a common reason scripts feel 'mysteriously slow' because of the rendering overhead."
+
+For Blobulator specifically:
+- **60fps SVG animation** with `feGaussianBlur` gooey filter = heavy GPU/CPU per frame
+- **Headed mode** = browser renders EVERY frame to screen
+- **Each Playwright action** waits for browser "idle" state before responding
+- **Screenshots** block until paint completion
+
+This is a **fundamental architecture mismatch**: Playwright designed for discrete automation (click, type, navigate), not real-time visual feedback of continuous animation.
+
+### Why GPU is Disabled (Root Cause)
+
+**Playwright/Puppeteer disable GPU by default for stability:**
+1. GPU process crashes caused `await Page()` to hang forever (GitHub #4761)
+2. `--disable-gpu-compositing` implicitly added in headless mode (GitHub #6083)
+3. CI/Docker compatibility - most automation runs on servers without GPUs
+
+**The fix**: Use Chrome DevTools MCP with `--autoConnect` to connect to your normal GPU-enabled Chrome browser (see "Browser MCP Selection" above).
+
+### MCP Tool Selection Framework
+
+| Aspect | Playwright MCP | fast-playwright-mcp | Chrome DevTools MCP | **CDT Fork** |
+|--------|---------------|---------------------|---------------------|--------------|
+| **Engine** | Playwright | Playwright | Puppeteer | Puppeteer |
+| **Speed** | Baseline | Baseline | **15-20% faster** | **15-20% faster** |
+| **Token usage** | High | **Low** | High | **Low** |
+| **GPU via --autoConnect** | No | No | **Yes** | **Yes** |
+| **maxLength/selector** | No | Yes | No | **Yes** |
+| **Image resizing** | No | Yes | No | **Yes** |
+
+**Decision guide:**
+- **GPU + speed + token efficiency**: Chrome DevTools MCP fork (see "Browser MCP Selection" above)
+- **GPU + speed only**: Chrome DevTools MCP + `--autoConnect`
+- **Token efficiency only**: fast-playwright-mcp
+
+### Alternative: Chrome DevTools MCP
+
+Official Google alternative (released Sep 2025), uses Puppeteer:
 
 ```json
 {
-  "browser": {
-    "browserName": "chromium",
-    "launchOptions": {
-      "channel": "chrome",
-      "args": [
-        "--ignore-gpu-blocklist",
-        "--enable-gpu-rasterization",
-        "--enable-zero-copy",
-        "--enable-features=CanvasOopRasterization"
-      ]
+  "mcpServers": {
+    "chrome-devtools": {
+      "command": "npx",
+      "args": ["-y", "chrome-devtools-mcp@latest"]
     }
   }
 }
 ```
 
-**Do NOT use Linux flags** like `--use-gl=egl` or `VaapiVideoDecoder` - these cause high CPU usage on macOS. Restart Claude Code after config changes (MCP caches config at startup).
+**Killer feature - `--autoConnect`**: Connects to your NORMAL Chrome (with GPU working!):
+
+```json
+{
+  "mcpServers": {
+    "chrome-devtools": {
+      "command": "npx",
+      "args": ["chrome-devtools-mcp@latest", "--autoConnect", "--channel=stable"]
+    }
+  }
+}
+```
+
+Requires: Chrome M144+, enable remote debugging at `chrome://inspect/#remote-debugging`.
+
+### fast-playwright-mcp (Token Optimization)
+
+Worth using for **token savings** regardless of rendering issues:
+
+| Feature | Effect |
+|---------|--------|
+| `includeSnapshot: false` | **70-80% token reduction** |
+| `includeCode: false` | Suppresses code generation in response |
+| `includeConsole: false` | Excludes console messages |
+| Image compression | JPEG format, quality setting, maxWidth |
+| Batch execution | Multiple actions in one request |
+
+**Note**: These features are now available in the Chrome DevTools MCP fork (see above).
