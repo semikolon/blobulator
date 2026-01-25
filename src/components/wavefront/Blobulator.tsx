@@ -83,13 +83,14 @@ const BEAT_PULSE_DECAY = 2;           // How fast pulse decays (higher = faster 
 const SEED_BLOBS_INITIAL = 50;        // First second: spawn 50 blobs
 const SEED_DECAY_FACTOR = 0.4;        // Each second: spawn 40% of previous (50→20→8→3...)
 const SEED_DURATION_SECONDS = 5;       // Seeding phase lasts 5 seconds
-const SPAWN_RATE_CALM = 0.5;          // Blobs/second when intensity < 70%
-const SPAWN_RATE_INTENSE = 2;         // Blobs/second when intensity > 70% (reduced from 3)
-const DEATH_RATE_CALM = 0.4;          // Blobs/second dying when intensity < 70%
-const DEATH_RATE_INTENSE = 0.3;       // Blobs/second dying when intensity > 70% (increased from 0.2)
-const INTENSITY_THRESHOLD = 0.7;      // Below this: slightly more die than spawn
+const SPAWN_RATE_CALM = 0.3;          // Blobs/second when intensity < 50%
+const SPAWN_RATE_INTENSE = 3;         // Blobs/second when intensity >= 50%
+const DEATH_RATE_CALM = 0.6;          // Blobs/second dying when intensity < 50% (population shrinks)
+const DEATH_RATE_INTENSE = 0.2;       // Blobs/second dying when intensity >= 50% (population grows)
+const INTENSITY_THRESHOLD = 0.5;      // Below this: deaths outpace spawns → population shrinks
 
-// Soft population cap - death rate scales up as we approach limit
+// Population bounds - intensity drives population between these limits
+const MIN_POPULATION = 40;            // Floor - don't shrink below this even when calm
 const SOFT_CAP_START = 200;           // Start increasing death rate here
 const SOFT_CAP_MAX = 350;             // Maximum comfortable population
 const HARD_CAP_LIMIT = 400;           // Emergency cull threshold
@@ -934,9 +935,12 @@ export function Blobulator({ audio }: BlobulatorProps) {
       // Track spawn event (recycled blobs count as spawns visually)
       let didSpawn = deadBlobs.length > 0;
 
-      // Only create truly NEW blobs during seeding phase
-      // After seeding, population is maintained by recycling dead blobs
-      if (spawnCount > 0 && isSeeding) {
+      // Spawn NEW blobs - during seeding OR after seeding if below soft cap
+      // This allows population to grow with intensity after initial seeding
+      const currentAliveCount = updatedBlobs.filter(b => !b.dying).length;
+      const canSpawnNew = isSeeding || currentAliveCount < SOFT_CAP_START;
+
+      if (spawnCount > 0 && canSpawnNew) {
         didSpawn = true;
         for (let i = 0; i < spawnCount; i++) {
           updatedBlobs.push(createRandomBlob());
@@ -947,7 +951,7 @@ export function Blobulator({ audio }: BlobulatorProps) {
       // Only count non-dying blobs toward population
       let didMarkDeath = false;
       const aliveCount = updatedBlobs.filter(b => !b.dying).length;
-      if (shouldKillOldest && aliveCount > 20) {
+      if (shouldKillOldest && aliveCount > MIN_POPULATION) {
         // Find oldest non-dying blob
         let oldestAge = -1;
         let oldestIndex = -1;
