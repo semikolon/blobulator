@@ -32,6 +32,16 @@ const CLUSTERS = [
   { sizeMultiplier: 2.0, speedMultiplier: 0.5, centerOffset: { x: 180, y: -50 } },    // Large & slow
 ];
 
+// Background blob layer - larger, darker, slower blobs behind the main field
+const BG_BLOB_COUNT = 25;                // Fewer blobs in background
+const BG_SIZE_MULTIPLIER = 2.5;          // 2.5x larger than foreground
+const BG_SIZE_VARIATION = 0.6;           // ±60% size variation for variety
+const BG_SPEED_MULTIPLIER = 0.25;        // 4x slower than foreground
+const BG_LIGHTNESS_OFFSET = -20;         // 20% darker than foreground colors
+const BG_SATURATION_OFFSET = -15;        // Less saturated (muted)
+// const BG_DIRECTION_OFFSET = Math.PI;  // No longer used - orbital motion instead
+const BG_GOOEY_BLUR = 24;                // Larger blur for softer edges
+
 // Blob interaction configuration - affects color, size, and direction
 const BLOB_INFLUENCE_RADIUS = 80;      // Pixels - blobs within this distance influence each other
 const COLOR_BLEND_STRENGTH = 0.5;      // 0-1 - color blending intensity
@@ -59,6 +69,10 @@ const HUE_BRIGHT = 50;      // Yellow for "all high" state (hard to reach)
 // Low BPM (60-90) = calm/cool, High BPM (140-180) = energetic/warm
 const BPM_MIN = 70;   // Below this = fully calm (0)
 const BPM_MAX = 150;  // Above this = fully energetic (1)
+
+// Beat pulse configuration - blobs pulse in time with detected BPM
+const BEAT_PULSE_STRENGTH = 0;        // TEMPORARILY DISABLED - set to 0.1 to re-enable
+const BEAT_PULSE_DECAY = 2;           // How fast pulse decays (higher = faster fade)
 
 // "Energy" metric = BPM + inertia combined (used for cluster-specific effects)
 // This creates sustained energy that doesn't flicker with every beat
@@ -193,17 +207,22 @@ const styles = {
     top: 16,
     left: 16,
     zIndex: 20,
-    backgroundColor: 'rgba(39, 39, 42, 0.8)',
+    // Purple-tinted background matching page bg, semi-transparent
+    backgroundColor: 'hsla(275, 25%, 22%, 0.7)',
     borderRadius: 16,
     padding: 16,
-    color: 'white',
+    // Muted text - 50% contrast against purple bg
+    color: 'hsla(275, 15%, 65%, 1)',
     fontFamily: 'system-ui, sans-serif',
     minWidth: 200,
+    backdropFilter: 'blur(8px)',
   },
   title: {
     fontSize: 20,
     fontWeight: 'bold' as const,
     marginBottom: 12,
+    // Slightly brighter for title
+    color: 'hsla(275, 20%, 75%, 1)',
   },
   button: {
     padding: '10px 20px',
@@ -212,23 +231,28 @@ const styles = {
     border: 'none',
     cursor: 'pointer',
     fontSize: 14,
-    transition: 'background-color 0.2s',
+    transition: 'all 0.2s',
+    // Muted button text
+    color: 'hsla(275, 20%, 80%, 1)',
   },
   buttonStart: {
-    backgroundColor: '#ec4899',
+    // Colorless - dark with opacity
+    backgroundColor: 'hsla(0, 0%, 100%, 0.15)',
   },
   buttonStop: {
-    backgroundColor: '#ef4444',
+    // Colorless - slightly brighter when active
+    backgroundColor: 'hsla(0, 0%, 100%, 0.25)',
   },
   error: {
-    color: '#f87171',
+    color: 'hsla(350, 50%, 60%, 1)',
     fontSize: 12,
     marginBottom: 8,
   },
   stats: {
     marginTop: 12,
     fontSize: 11,
-    color: '#a1a1aa',
+    // Muted stats text
+    color: 'hsla(275, 15%, 55%, 1)',
   },
   meterContainer: {
     marginTop: 12,
@@ -248,7 +272,8 @@ const styles = {
   meterBg: {
     flex: 1,
     height: 6,
-    backgroundColor: '#3f3f46',
+    // Purple-tinted meter background
+    backgroundColor: 'hsla(275, 20%, 28%, 0.8)',
     borderRadius: 3,
     overflow: 'hidden',
   },
@@ -282,6 +307,88 @@ function createBlob(baseBlobSize: number): WaveFrontBlob {
   };
 }
 
+// Background blob type - simpler than foreground, no lifecycle management
+interface BackgroundBlob {
+  id: string;
+  x: number;
+  y: number;
+  // Orbital motion parameters
+  anchorX: number;        // Center point of orbit (slowly drifts)
+  anchorY: number;
+  orbitRadius: number;    // Distance from anchor
+  orbitSpeed: number;     // Angular velocity (radians per ms)
+  orbitPhase: number;     // Current angle in orbit
+  orbitEccentricity: number; // 0 = circle, higher = more elliptical
+  anchorDriftAngle: number;  // Direction anchor is drifting
+  anchorDriftSpeed: number;  // How fast anchor moves
+  size: number;           // Base size (larger than foreground)
+  colorIndex: number;
+  phaseOffset: number;    // For individual animation variation
+}
+
+// Helper to create a background blob with orbital motion
+function createBackgroundBlob(baseBlobSize: number, viewportWidth: number, viewportHeight: number): BackgroundBlob {
+  const padding = 150;
+  const maxX = (viewportWidth / 2) - padding;
+  const maxY = (viewportHeight / 2) - padding;
+
+  // Size variation: base * multiplier * (1 ± variation)
+  const sizeVariation = 1 + (Math.random() - 0.5) * 2 * BG_SIZE_VARIATION;
+
+  // Random anchor position (center of orbit)
+  const anchorX = (Math.random() - 0.5) * 2 * maxX * 0.7;
+  const anchorY = (Math.random() - 0.5) * 2 * maxY * 0.7;
+
+  // Orbital parameters - varied for organic feel
+  const orbitRadius = 30 + Math.random() * 120;  // 30-150px orbit radius
+  const orbitSpeed = (0.00003 + Math.random() * 0.00008) * (Math.random() > 0.5 ? 1 : -1); // Some orbit CW, some CCW
+  const orbitPhase = Math.random() * Math.PI * 2;
+  const orbitEccentricity = 0.2 + Math.random() * 0.5; // Elliptical orbits
+
+  // Anchor drift - very slow wandering
+  const anchorDriftAngle = Math.random() * Math.PI * 2;
+  const anchorDriftSpeed = 0.003 + Math.random() * 0.005; // Very slow drift
+
+  // Initial position on orbit
+  const x = anchorX + Math.cos(orbitPhase) * orbitRadius;
+  const y = anchorY + Math.sin(orbitPhase) * orbitRadius * orbitEccentricity;
+
+  return {
+    id: `bg-${Math.random().toString(36).slice(2, 11)}`,
+    x,
+    y,
+    anchorX,
+    anchorY,
+    orbitRadius,
+    orbitSpeed,
+    orbitPhase,
+    orbitEccentricity,
+    anchorDriftAngle,
+    anchorDriftSpeed,
+    size: baseBlobSize * BG_SIZE_MULTIPLIER * sizeVariation,
+    colorIndex: Math.floor(Math.random() * 5),
+    phaseOffset: Math.random() * Math.PI * 2,
+  };
+}
+
+// Calculate beat pulse multiplier - syncs blob pulsing to BPM
+// Returns a value that pulses between 1 and 1+BEAT_PULSE_STRENGTH in time with the beat
+function getBeatPulse(elapsedMs: number, bpm: number, phaseOffset: number = 0): number {
+  if (bpm <= 0) return 1;
+
+  // Convert BPM to milliseconds per beat
+  const msPerBeat = 60000 / bpm;
+
+  // Calculate position in beat cycle (0-1)
+  const beatPhase = ((elapsedMs + phaseOffset * msPerBeat) % msPerBeat) / msPerBeat;
+
+  // Create a sharp attack, exponential decay pulse
+  // Peak at start of beat, decay quickly
+  const pulse = Math.exp(-beatPhase * BEAT_PULSE_DECAY);
+
+  return 1 + pulse * BEAT_PULSE_STRENGTH;
+}
+
 export function Blobulator({ audio }: BlobulatorProps) {
   // Initialize with 50 blobs immediately (no timing dependencies)
   const [blobs, setBlobs] = useState<WaveFrontBlob[]>(() =>
@@ -291,6 +398,9 @@ export function Blobulator({ audio }: BlobulatorProps) {
   const [viewport, setViewport] = useState({ width: window.innerWidth, height: window.innerHeight });
   const [isPaused, setIsPaused] = useState(false);
 
+  // Background blobs - initialized after first render when viewport is known
+  const [bgBlobs, setBgBlobs] = useState<BackgroundBlob[]>([]);
+
   // Extract audio values from shared audio prop
   const {
     isListening,
@@ -298,6 +408,7 @@ export function Blobulator({ audio }: BlobulatorProps) {
     features,
     intensity,
     inertiaIntensity,
+    energyVolatility,
     bpm,
     bpmConfidence,
     startListening,
@@ -390,6 +501,16 @@ export function Blobulator({ audio }: BlobulatorProps) {
     window.addEventListener('resize', handleResize);
     return () => window.removeEventListener('resize', handleResize);
   }, []);
+
+  // Initialize background blobs when viewport is ready
+  useEffect(() => {
+    if (viewport.width > 0 && viewport.height > 0 && bgBlobs.length === 0) {
+      const initialBgBlobs = Array.from({ length: BG_BLOB_COUNT }, () =>
+        createBackgroundBlob(config.baseBlobSize, viewport.width, viewport.height)
+      );
+      setBgBlobs(initialBgBlobs);
+    }
+  }, [viewport.width, viewport.height, config.baseBlobSize, bgBlobs.length]);
 
   // Auto-start microphone on load (or on first user interaction if browser blocks it)
   useEffect(() => {
@@ -891,8 +1012,62 @@ export function Blobulator({ audio }: BlobulatorProps) {
       return updatedBlobs;
     });
 
+    // ===== BACKGROUND BLOB ANIMATION =====
+    // Orbital motion with drifting anchors - creates dreamy, planetary movement
+    setBgBlobs(currentBgBlobs => {
+      if (currentBgBlobs.length === 0) return currentBgBlobs;
+
+      const updatedBgBlobs = [...currentBgBlobs];
+      const centerX = viewport.width / 2;
+      const centerY = viewport.height / 2;
+
+      for (let i = 0; i < updatedBgBlobs.length; i++) {
+        const blob = updatedBgBlobs[i];
+
+        // BPM affects orbital speed subtly
+        const bpmSpeedBoost = 1 + bpmNormalized * 0.3;
+
+        // Update orbit phase (angular position)
+        blob.orbitPhase += blob.orbitSpeed * deltaMs * bpmSpeedBoost;
+
+        // Audio-reactive orbit radius modulation (bass makes orbits expand/contract)
+        const radiusModulation = 1 + features.bass * 0.15;
+
+        // Slowly evolve anchor drift direction (organic wandering)
+        blob.anchorDriftAngle += Math.sin(elapsedRef.current * 0.00005 + blob.phaseOffset) * 0.0001 * deltaMs;
+
+        // Move anchor point slowly
+        blob.anchorX += Math.cos(blob.anchorDriftAngle) * blob.anchorDriftSpeed * deltaMs * BG_SPEED_MULTIPLIER;
+        blob.anchorY += Math.sin(blob.anchorDriftAngle) * blob.anchorDriftSpeed * deltaMs * BG_SPEED_MULTIPLIER;
+
+        // Soft boundary for anchor - keep it from drifting off screen
+        const margin = 250;
+        const maxX = centerX - margin;
+        const maxY = centerY - margin;
+        const anchorDist = Math.sqrt(blob.anchorX * blob.anchorX + blob.anchorY * blob.anchorY);
+        const maxAnchorDist = Math.min(maxX, maxY);
+
+        if (anchorDist > maxAnchorDist) {
+          // Gently pull anchor back toward center
+          const pullStrength = 0.001 * deltaMs;
+          blob.anchorX *= (1 - pullStrength);
+          blob.anchorY *= (1 - pullStrength);
+          // Rotate drift direction toward center
+          const toCenter = Math.atan2(-blob.anchorY, -blob.anchorX);
+          blob.anchorDriftAngle = blob.anchorDriftAngle * 0.95 + toCenter * 0.05;
+        }
+
+        // Calculate position on elliptical orbit around anchor
+        const effectiveRadius = blob.orbitRadius * radiusModulation;
+        blob.x = blob.anchorX + Math.cos(blob.orbitPhase) * effectiveRadius;
+        blob.y = blob.anchorY + Math.sin(blob.orbitPhase) * effectiveRadius * blob.orbitEccentricity;
+      }
+
+      return updatedBgBlobs;
+    });
+
     animationRef.current = requestAnimationFrame(animate);
-  }, [config, features, viewport, intensity, isPaused, createRandomBlob, energyMetric]);
+  }, [config, features, viewport, intensity, isPaused, createRandomBlob, energyMetric, bpmNormalized]);
 
   // Start/stop animation
   useEffect(() => {
@@ -926,6 +1101,11 @@ export function Blobulator({ audio }: BlobulatorProps) {
 
     // Mids create per-blob wobble (different phase per blob, stronger)
     const midWobble = 1 + features.mid * 0.35 * Math.sin(elapsedRef.current * 0.004 + index * 0.5);
+
+    // BPM-synchronized beat pulse - blobs pulse in time with the music
+    // Phase offset per blob creates subtle variation (not all pulse at exactly the same time)
+    const beatPulsePhase = (index % 8) * 0.1; // 0-0.7 phase offset range
+    const beatPulse = getBeatPulse(elapsedRef.current, bpm, beatPulsePhase);
 
     // Breathing effect - stronger at low BPM (calm state)
     const breathingAmount = (1 - bpmNormalized) * getSizeBreathingMultiplier(elapsedRef.current, index);
@@ -988,7 +1168,8 @@ export function Blobulator({ audio }: BlobulatorProps) {
     // Use easeOutQuad for more natural growth (fast start, slow end)
     const lifecycleEased = 1 - (1 - blob.lifecycle) * (1 - blob.lifecycle);
 
-    return baseSize * blobVariation * bassThump * amplitudeBoost * midWobble * breathingMultiplier * clusterPulseMultiplier * neighborSizeInfluence * lifecycleEased;
+    // Combine all multipliers and ensure non-negative (SVG circles require r >= 0)
+    return Math.max(0, baseSize * blobVariation * bassThump * amplitudeBoost * midWobble * beatPulse * breathingMultiplier * clusterPulseMultiplier * neighborSizeInfluence * lifecycleEased);
   };
 
   // Calculate base HSL color for a blob (without neighbor blending)
@@ -1139,15 +1320,74 @@ export function Blobulator({ audio }: BlobulatorProps) {
     return `hsl(${finalHue}, ${finalSat}%, ${finalLight}%)`;
   };
 
+  // Calculate display size for background blobs - simpler than foreground
+  const getBgDisplaySize = (blob: BackgroundBlob) => {
+    // Base size (already includes BG_SIZE_MULTIPLIER from creation)
+    const baseSize = blob.size;
+
+    // Beat pulse for background - slightly different phase, half strength
+    const bgBeatPulse = getBeatPulse(elapsedRef.current, bpm, blob.phaseOffset) * 0.5 + 0.5;
+
+    // Slow breathing effect
+    const breathing = 1 + Math.sin(elapsedRef.current * 0.0003 + blob.phaseOffset) * 0.1;
+
+    // Bass creates subtle size boost
+    const bassBoost = 1 + features.bass * 0.3;
+
+    // Amplitude boost (gentler than foreground)
+    const ampBoost = 1 + features.amplitude * 0.2;
+
+    // Ensure non-negative (SVG circles require r >= 0)
+    return Math.max(0, baseSize * bgBeatPulse * breathing * bassBoost * ampBoost);
+  };
+
+  // Calculate color for background blobs - darker, muted version of foreground colors
+  const getBgColor = (blob: BackgroundBlob): string => {
+    // Use similar frequency-based coloring as foreground but with offsets
+    const clusterIndex = blob.colorIndex % 3;
+    const bias = CLUSTER_FREQUENCY_BIAS[clusterIndex];
+
+    const bass = features.bass * bias.bassWeight;
+    const mids = features.mid * bias.midsWeight;
+    const treble = features.treble * bias.trebleWeight;
+    const totalFreq = bass + mids + treble + 0.001;
+
+    const bassRatio = bass / totalFreq;
+    const midsRatio = mids / totalFreq;
+    const trebleRatio = treble / totalFreq;
+
+    // Calculate hue (same as foreground)
+    const bassAngle = HUE_BASS * Math.PI / 180;
+    const midsAngle = HUE_MIDS * Math.PI / 180;
+    const trebleAngle = HUE_TREBLE * Math.PI / 180;
+
+    const x = bassRatio * Math.cos(bassAngle) + midsRatio * Math.cos(midsAngle) + trebleRatio * Math.cos(trebleAngle);
+    const y = bassRatio * Math.sin(bassAngle) + midsRatio * Math.sin(midsAngle) + trebleRatio * Math.sin(trebleAngle);
+    let hue = Math.atan2(y, x) * 180 / Math.PI;
+    if (hue < 0) hue += 360;
+
+    // Per-blob variation
+    hue = ((hue + (blob.colorIndex - 2) * 8) % 360 + 360) % 360;
+
+    // Background-specific: darker and more muted
+    const baseSaturation = 45 + features.bass * 15 + intensity * 10;
+    const baseLightness = 25 + features.treble * 8 + intensity * 10;
+
+    const saturation = Math.max(20, Math.min(70, baseSaturation + BG_SATURATION_OFFSET));
+    const lightness = Math.max(12, Math.min(45, baseLightness + BG_LIGHTNESS_OFFSET));
+
+    return `hsl(${hue}, ${saturation}%, ${lightness}%)`;
+  };
+
   const centerX = viewport.width / 2;
   const centerY = viewport.height / 2;
 
   // Dynamic background color based on BPM + inertia intensity
-  // Interpolate between calm purple tint and energetic dark
-  // Inertia intensity adds sustained energy glow (saturation boost)
-  const bgLightness = 10 + bpmNormalized * 4 + inertiaIntensity * 3;  // Up to 17% with sustained energy
-  const bgSaturation = 20 - bpmNormalized * 10 + inertiaIntensity * 15; // Inertia adds up to 15% saturation
-  const backgroundColor = `hsl(270, ${Math.min(35, bgSaturation)}%, ${Math.min(18, bgLightness)}%)`;
+  // Sits between foreground blobs (bright) and background blobs (muted) for layered depth
+  // Higher lightness makes background blob layer more visible
+  const bgLightness = 18 + bpmNormalized * 5 + inertiaIntensity * 4;  // 18-27% - brighter to show bg blobs
+  const bgSaturation = 25 + inertiaIntensity * 10; // 25-35% saturation for richer purple
+  const backgroundColor = `hsl(275, ${Math.min(40, bgSaturation)}%, ${Math.min(28, bgLightness)}%)`;
 
   // Current time for calculating debug flash visibility
   const now = performance.now();
@@ -1209,10 +1449,11 @@ export function Blobulator({ audio }: BlobulatorProps) {
         {isListening && (
           <div style={styles.meterContainer}>
             {[
-              { label: 'Amp', value: features.amplitude, color: '#ec4899' },
-              { label: 'Bass', value: features.bass, color: '#ef4444' },
-              { label: 'Mid', value: features.mid, color: '#f97316' },
-              { label: 'Treble', value: features.treble, color: '#eab308' },
+              // Muted purple-toned colors that blend with the UI
+              { label: 'Amp', value: features.amplitude, color: 'hsla(320, 45%, 50%, 0.7)' },
+              { label: 'Bass', value: features.bass, color: 'hsla(350, 40%, 50%, 0.7)' },
+              { label: 'Mid', value: features.mid, color: 'hsla(30, 50%, 50%, 0.7)' },
+              { label: 'Treble', value: features.treble, color: 'hsla(275, 40%, 55%, 0.7)' },
             ].map(({ label, value, color }) => (
               <div key={label} style={styles.meterRow}>
                 <span style={styles.meterLabel}>{label}:</span>
@@ -1240,7 +1481,7 @@ export function Blobulator({ audio }: BlobulatorProps) {
               BPM: {bpm} {bpmConfidence > 0.5 ? '✓' : '~'} | Style: {(bpmNormalized * 100).toFixed(0)}%
             </p>
             <p style={{ ...styles.stats, fontSize: 10, marginTop: 2 }}>
-              Intensity: {(intensity * 100).toFixed(0)}% | Inertia: {(inertiaIntensity * 100).toFixed(0)}%
+              Intensity: {(intensity * 100).toFixed(0)}% | Inertia: {(inertiaIntensity * 100).toFixed(0)}% | Vol: {(energyVolatility * 1000).toFixed(1)}
             </p>
           </>
         )}
@@ -1249,7 +1490,12 @@ export function Blobulator({ audio }: BlobulatorProps) {
       {/* Blob Visualization with Gooey SVG Filter */}
       <svg style={styles.svg} viewBox={`0 0 ${viewport.width} ${viewport.height}`}>
         <defs>
-          {/* Gooey metaball filter - matches brf-auto "strong" intensity WITHOUT composite
+          {/* Background gooey filter - larger blur for softer, more dreamlike edges */}
+          <filter id="goo-bg" colorInterpolationFilters="sRGB">
+            <feGaussianBlur in="SourceGraphic" stdDeviation={BG_GOOEY_BLUR} />
+            <feColorMatrix values="1 0 0 0 0  0 1 0 0 0  0 0 1 0 0  0 0 0 144 -72" />
+          </filter>
+          {/* Foreground gooey metaball filter - matches brf-auto "strong" intensity WITHOUT composite
               (no feComposite = internal blobs merge together, not just at edges) */}
           <filter id="goo" colorInterpolationFilters="sRGB">
             <feGaussianBlur in="SourceGraphic" stdDeviation="16" />
@@ -1257,6 +1503,20 @@ export function Blobulator({ audio }: BlobulatorProps) {
           </filter>
         </defs>
 
+        {/* Background blob layer - larger, darker, slower blobs */}
+        <g filter="url(#goo-bg)">
+          {bgBlobs.map((blob) => (
+            <circle
+              key={blob.id}
+              cx={centerX + blob.x}
+              cy={centerY + blob.y}
+              r={getBgDisplaySize(blob)}
+              fill={getBgColor(blob)}
+            />
+          ))}
+        </g>
+
+        {/* Foreground blob layer */}
         <g filter="url(#goo)">
           {blobs.map((blob, index) => {
             // Truly dead blobs (dying + lifecycle exhausted) render with r=0

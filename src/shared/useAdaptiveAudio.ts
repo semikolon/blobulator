@@ -34,17 +34,26 @@ const INERTIA_SAMPLES = INERTIA_WINDOW_MS / SAMPLE_INTERVAL_MS; // 20 samples
 // BPM detection
 const DEFAULT_BPM = 120;             // Fallback BPM before detection stabilizes
 const BPM_INPUT_GAIN = 15;           // Amplify microphone signal for BPM detection (mic is weak)
-const BPM_SMOOTHING = 0.97;          // Very heavy smoothing - only 3% of new value per update
-const BPM_JUMP_THRESHOLD = 15;       // Ignore jumps larger than 15 BPM (tighter filter)
-const BPM_UPDATE_INTERVAL_MS = 1000; // Max 1 BPM display update per second (prevents flickering)
+const BPM_SMOOTHING = 0.8;           // Moderate smoothing - 20% of new value per update
+const BPM_JUMP_THRESHOLD = 50;       // Allow larger jumps (lofi ~80 vs electronic ~140)
+const BPM_UPDATE_INTERVAL_MS = 500;  // Update twice per second for responsiveness
+
+// Half-time detection - the library normalizes BPM to 90-180 range, so slow music gets doubled
+// Use energy VOLATILITY (rate of change variance) instead of intensity, because lofi can have
+// high bass intensity while still being slow tempo
+const HALFTIME_BPM_THRESHOLD = 115;           // If BPM > this AND volatility low, probably doubled
+const HALFTIME_VOLATILITY_THRESHOLD = 0.015;  // Volatility below this suggests slow/calm music
+const VOLATILITY_HISTORY_SIZE = 30;           // 3 seconds of frame-to-frame changes for volatility calc
 
 interface AdaptiveState {
   amplitudeHistory: number[];
   energyHistory: number[];           // Recent energy values for derivative calculation
+  volatilityHistory: number[];       // Frame-to-frame energy changes for volatility calc
   inertiaHistory: number[];          // Last 2s of intensity for rolling average
   adaptiveThreshold: number;
   smoothedIntensity: number;         // Smoothed 0-1 intensity value
   inertiaIntensity: number;          // 2-second rolling average intensity
+  energyVolatility: number;          // How rapidly energy changes (for half-time detection)
   bpm: number;                       // Current detected BPM
   bpmConfidence: number;             // How confident we are in the BPM (0-1)
   stats: {
@@ -64,6 +73,8 @@ interface AdaptiveAudioResult {
   intensity: number;
   // Inertia intensity (2-second rolling average) - stable for visual mapping
   inertiaIntensity: number;
+  // Energy volatility (how rapidly energy changes) - for half-time BPM detection
+  energyVolatility: number;
   // BPM detection
   bpm: number;
   bpmConfidence: number;
@@ -95,10 +106,12 @@ export function useAdaptiveAudio(): AdaptiveAudioResult {
   const [adaptiveState, setAdaptiveState] = useState<AdaptiveState>({
     amplitudeHistory: [],
     energyHistory: [],
+    volatilityHistory: [],
     inertiaHistory: [],
     adaptiveThreshold: 0.05,
     smoothedIntensity: 0,
     inertiaIntensity: 0,
+    energyVolatility: 0,
     bpm: DEFAULT_BPM,
     bpmConfidence: 0,
     stats: {
@@ -227,12 +240,22 @@ export function useAdaptiveAudio(): AdaptiveAudioResult {
               pendingBpmRef.current = pendingBpmRef.current * BPM_SMOOTHING + newBpm * (1 - BPM_SMOOTHING);
             }
 
-            // Only update React state once per second (prevents UI flickering)
+            // Only update React state at interval (prevents UI flickering)
             if (now - lastBpmUpdateTimeRef.current >= BPM_UPDATE_INTERVAL_MS) {
               lastBpmUpdateTimeRef.current = now;
-              const displayBpm = Math.round(pendingBpmRef.current);
 
               setAdaptiveState(prev => {
+                // Half-time correction: if BPM seems high but energy changes slowly, halve it
+                // The library normalizes to 90-180 range, so 66 BPM lofi shows as 132
+                // Use volatility (rate of energy change) not intensity, because lofi can have high bass
+                let correctedBpm = pendingBpmRef.current;
+                const shouldHalve = correctedBpm > HALFTIME_BPM_THRESHOLD && prev.energyVolatility < HALFTIME_VOLATILITY_THRESHOLD;
+                if (shouldHalve) {
+                  console.log(`Half-time correction: ${correctedBpm.toFixed(0)} → ${(correctedBpm/2).toFixed(0)} (volatility: ${(prev.energyVolatility * 1000).toFixed(2)} < ${(HALFTIME_VOLATILITY_THRESHOLD * 1000).toFixed(2)})`);
+                  correctedBpm = correctedBpm / 2;
+                }
+                const displayBpm = Math.round(correctedBpm);
+
                 // Skip if no meaningful change
                 if (prev.bpm === displayBpm) {
                   return { ...prev, bpmConfidence: Math.min(1, topResult.count / 100) };
@@ -260,11 +283,18 @@ export function useAdaptiveAudio(): AdaptiveAudioResult {
 
             // Force display update on stable event (these are rare)
             lastBpmUpdateTimeRef.current = 0;  // Reset to allow immediate update
-            setAdaptiveState(prev => ({
-              ...prev,
-              bpm: Math.round(pendingBpmRef.current),
-              bpmConfidence: 1,
-            }));
+            setAdaptiveState(prev => {
+              // Half-time correction for stable events too (use volatility, not intensity)
+              let correctedBpm = pendingBpmRef.current;
+              if (correctedBpm > HALFTIME_BPM_THRESHOLD && prev.energyVolatility < HALFTIME_VOLATILITY_THRESHOLD) {
+                correctedBpm = correctedBpm / 2;
+              }
+              return {
+                ...prev,
+                bpm: Math.round(correctedBpm),
+                bpmConfidence: 1,
+              };
+            });
           }
         });
 
@@ -383,6 +413,22 @@ export function useAdaptiveAudio(): AdaptiveAudioResult {
             ? newInertiaHistory.reduce((a, b) => a + b, 0) / newInertiaHistory.length
             : 0;
 
+          // Calculate energy volatility (how rapidly energy changes frame-to-frame)
+          // This helps distinguish slow lofi (low volatility) from fast electronic (high volatility)
+          // Used for half-time BPM detection since intensity alone can't distinguish tempo
+          const prevEnergy = prev.energyHistory.length > 0
+            ? prev.energyHistory[prev.energyHistory.length - 1]
+            : newFeatures.amplitude;
+          const energyChange = Math.abs(newFeatures.amplitude - prevEnergy);
+
+          const newVolatilityHistory = [...prev.volatilityHistory, energyChange];
+          if (newVolatilityHistory.length > VOLATILITY_HISTORY_SIZE) {
+            newVolatilityHistory.shift();
+          }
+          const newEnergyVolatility = newVolatilityHistory.length > 0
+            ? newVolatilityHistory.reduce((a, b) => a + b, 0) / newVolatilityHistory.length
+            : 0;
+
           // Update adaptive threshold based on smoothed intensity
           // This helps maintain the visual character across different music styles
           let newThreshold = prev.adaptiveThreshold;
@@ -409,10 +455,12 @@ export function useAdaptiveAudio(): AdaptiveAudioResult {
             ...prev,
             amplitudeHistory: newAmplitudeHistory,
             energyHistory: newEnergyHistory,
+            volatilityHistory: newVolatilityHistory,
             inertiaHistory: newInertiaHistory,
             adaptiveThreshold: newThreshold,
             smoothedIntensity: newSmoothedIntensity,
             inertiaIntensity: newInertiaIntensity,
+            energyVolatility: newEnergyVolatility,
             stats: newStats,
             bpm: Math.round(newBpm),
             bpmConfidence: newBpmConfidence,
@@ -445,6 +493,7 @@ export function useAdaptiveAudio(): AdaptiveAudioResult {
     normalizedFeatures,
     intensity: adaptiveState.smoothedIntensity,
     inertiaIntensity: adaptiveState.inertiaIntensity,
+    energyVolatility: adaptiveState.energyVolatility,
     bpm: adaptiveState.bpm,
     bpmConfidence: adaptiveState.bpmConfidence,
     adaptiveThreshold: adaptiveState.adaptiveThreshold,

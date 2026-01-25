@@ -16,11 +16,13 @@ const styles = {
     top: 16,
     right: 16,
     zIndex: 20,
-    backgroundColor: 'rgba(39, 39, 42, 0.8)',
+    // Purple-tinted background matching page bg
+    backgroundColor: 'hsla(275, 25%, 22%, 0.7)',
     borderRadius: 16,
     padding: 12,
     display: 'flex',
     gap: 8,
+    backdropFilter: 'blur(8px)',
   },
   button: {
     padding: '8px 16px',
@@ -33,12 +35,14 @@ const styles = {
     transition: 'all 0.2s ease',
   },
   buttonActive: {
-    backgroundColor: '#ec4899',
-    color: 'white',
+    // Colorless - white with higher opacity when active
+    backgroundColor: 'hsla(0, 0%, 100%, 0.2)',
+    color: 'hsla(0, 0%, 100%, 0.85)',
   },
   buttonInactive: {
-    backgroundColor: 'rgba(63, 63, 70, 0.8)',
-    color: '#a1a1aa',
+    // Colorless - very subtle
+    backgroundColor: 'hsla(0, 0%, 100%, 0.08)',
+    color: 'hsla(0, 0%, 100%, 0.45)',
   },
 };
 
