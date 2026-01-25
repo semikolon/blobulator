@@ -8,6 +8,22 @@ Audio-reactive metaball visualization engine with wavefront expansion animation,
 
 **Working visualization** with unified intensity-based animation, BPM detection, and 6 enhancement phases complete.
 
+### v5 - Dynamic Population & UI Polish (January 25, 2026)
+
+**Population is now intensity-driven** (was stuck at ~82 blobs forever after seeding):
+
+| Intensity | Spawn Rate | Death Rate | Effect |
+|-----------|------------|------------|--------|
+| < 50% | 0.3/sec | 0.6/sec | Population shrinks toward MIN_POPULATION (40) |
+| ≥ 50% | 3.0/sec | 0.2/sec | Population grows toward SOFT_CAP_START (200) |
+
+**Bug fixed**: After 5-second seeding, new blob creation was gated behind `&& isSeeding` - spawns calculated but ignored. Now spawns when `population < SOFT_CAP_START`.
+
+**Other changes:**
+- UI overlays: Purple-pink tinted text/buttons (hue 290-295°), fixed 250px width
+- Background blobs: Orbital motion with drifting anchors (was rectangular bouncing)
+- BPM detection: Volatility-based half-time correction for lofi/ambient music
+
 ### v4 - BPM Pulse & Background Layer (January 25, 2026)
 
 Enhanced BPM reactivity and layered depth:
@@ -491,3 +507,30 @@ Visual debugging tool for correlating code events with visual effects. Enable/di
 ### Debug Toggle: Dynamic Gravity
 
 `ENABLE_DYNAMIC_GRAVITY = false` disables cluster-based gravity centers (uses only fixed center pull). Useful for isolating jerkiness causes - proved that dynamic gravity wasn't the culprit in this case.
+
+---
+
+## Development Notes
+
+### Playwright MCP GPU Acceleration (macOS)
+
+Config at `~/.config/playwright-mcp/config.json`. **macOS requires different flags than Linux**:
+
+```json
+{
+  "browser": {
+    "browserName": "chromium",
+    "launchOptions": {
+      "channel": "chrome",
+      "args": [
+        "--ignore-gpu-blocklist",
+        "--enable-gpu-rasterization",
+        "--enable-zero-copy",
+        "--enable-features=CanvasOopRasterization"
+      ]
+    }
+  }
+}
+```
+
+**Do NOT use Linux flags** like `--use-gl=egl` or `VaapiVideoDecoder` - these cause high CPU usage on macOS. Restart Claude Code after config changes (MCP caches config at startup).
