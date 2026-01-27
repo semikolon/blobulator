@@ -84,14 +84,14 @@ const SEED_BLOBS_INITIAL = 50;        // First second: spawn 50 blobs
 const SEED_DECAY_FACTOR = 0.4;        // Each second: spawn 40% of previous (50→20→8→3...)
 const SEED_DURATION_SECONDS = 5;       // Seeding phase lasts 5 seconds
 const SPAWN_RATE_CALM = 0.3;          // Blobs/second when intensity < 50%
-const SPAWN_RATE_INTENSE = 3;         // Blobs/second when intensity >= 50%
+const SPAWN_RATE_INTENSE = 1.5;       // Blobs/second when intensity >= 50% (was 3)
 const DEATH_RATE_CALM = 0.6;          // Blobs/second dying when intensity < 50% (population shrinks)
-const DEATH_RATE_INTENSE = 0.2;       // Blobs/second dying when intensity >= 50% (population grows)
+const DEATH_RATE_INTENSE = 0.5;       // Blobs/second dying when intensity >= 50% (was 0.2)
 const INTENSITY_THRESHOLD = 0.5;      // Below this: deaths outpace spawns → population shrinks
 
 // Population bounds - intensity drives population between these limits
 const MIN_POPULATION = 40;            // Floor - don't shrink below this even when calm
-const SOFT_CAP_START = 200;           // Start increasing death rate here
+const SOFT_CAP_START = 130;           // Start increasing death rate here (was 200)
 const SOFT_CAP_MAX = 350;             // Maximum comfortable population
 const HARD_CAP_LIMIT = 400;           // Emergency cull threshold
 const HARD_CAP_TARGET = 350;          // Cull down to this
