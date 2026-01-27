@@ -1500,6 +1500,16 @@ export function Blobulator({ audio }: BlobulatorProps) {
     // Per-blob variation
     hue = ((hue + (blob.colorIndex - 2) * 8) % 360 + 360) % 360;
 
+    // Shift hue toward base background (270°) for better integration
+    // This makes bg blobs feel more cohesive with the purple base
+    const bgBaseHue = 270;
+    const hueBlend = 0.5; // 50% blend toward background purple
+    // Circular hue interpolation
+    let hueDiff = bgBaseHue - hue;
+    if (hueDiff > 180) hueDiff -= 360;
+    if (hueDiff < -180) hueDiff += 360;
+    hue = ((hue + hueDiff * hueBlend) % 360 + 360) % 360;
+
     // Background-specific: darker and more muted
     const baseSaturation = 45 + features.bass * 15 + intensity * 10;
     const baseLightness = 25 + features.treble * 8 + intensity * 10;
