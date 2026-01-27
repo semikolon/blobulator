@@ -659,11 +659,22 @@ export function Blobulator({ audio }: BlobulatorProps) {
       // Mids → lerpFactor: higher mids = snappier response to flow field (less momentum)
       // Treble → timeEvolution: higher treble = faster flow field changes (sparkly/energetic)
       // Bass → scale: higher bass = broader sweeping curves (vs tight local swirls)
+      // BPM → scale: higher BPM = broader sweeping motion (confidence-weighted)
+      // Time → all three: subtle drift over 2-minute cycle for organic evolution
+      const bpmScaleInfluence = bpmConfidence > 0.5
+        ? 1 - bpmNormalized * 0.4  // 1.0 at low BPM → 0.6 at high BPM (trusted)
+        : 1;                        // No influence if BPM unreliable
+      // Slow time variation: 2-minute cycle (0.0000523 rad/ms), ±10-15% modulation
+      // Different phase offsets so parameters don't all peak together
+      const twoMinCycle = elapsedRef.current * 0.0000523; // 2π / 120000ms
+      const timeVarScale = 1 + Math.sin(twoMinCycle) * 0.10;              // ±10%
+      const timeVarLerp = 1 + Math.sin(twoMinCycle + 2.1) * 0.15;         // ±15%, phase offset
+      const timeVarEvolution = 1 + Math.sin(twoMinCycle + 4.2) * 0.12;    // ±12%, different offset
       const dynamicConfig = {
         ...config,
-        curlLerpFactor: 0.01 + features.mid * 0.07,      // 0.01 → 0.08 (snappier with mids)
-        curlTimeEvolution: 0.0001 + features.treble * 0.0009, // 0.0001 → 0.001 (faster with treble)
-        curlScale: 0.005 + (1 - features.bass) * 0.01,   // 0.005 → 0.015 (broader with bass)
+        curlLerpFactor: (0.01 + features.mid * 0.07) * timeVarLerp,      // 0.01 → 0.08 (snappier with mids)
+        curlTimeEvolution: (0.0001 + features.treble * 0.0009) * timeVarEvolution, // 0.0001 → 0.001 (faster with treble)
+        curlScale: (0.005 + (1 - features.bass) * 0.01) * bpmScaleInfluence * timeVarScale, // Broader with bass AND high BPM
       };
 
       // Process each blob with BOTH drift and expansion physics blended together
@@ -796,10 +807,12 @@ export function Blobulator({ audio }: BlobulatorProps) {
 
       for (const blob of updatedBlobs) {
         // Fixed center gravity - pulls blobs toward page center
+        // Stronger in drift mode (quiet) to keep blobs clustered, weaker when expanding
+        const gravityStrength = FIXED_CENTER_GRAVITY * (0.3 + driftFactor * 1.7); // 0.3x loud → 2x quiet
         const distFromCenter = Math.sqrt(blob.x * blob.x + blob.y * blob.y);
         if (distFromCenter > 50) {
-          blob.x -= blob.x * FIXED_CENTER_GRAVITY * deltaMs;
-          blob.y -= blob.y * FIXED_CENTER_GRAVITY * deltaMs;
+          blob.x -= blob.x * gravityStrength * deltaMs;
+          blob.y -= blob.y * gravityStrength * deltaMs;
         }
 
         // Dynamic gravity centers - pull toward where blobs congregate (only when enabled)
@@ -1097,14 +1110,14 @@ export function Blobulator({ audio }: BlobulatorProps) {
     // Per-blob variation using index for uniqueness (±15%)
     const blobVariation = 1 + Math.sin(index * 1.7) * 0.15;
 
-    // BASS THUMP: Strong size pulse on bass hits (80% boost at max)
-    const bassThump = 1 + features.bass * 0.8;
+    // BASS THUMP: Size pulse on bass hits (50% boost, was 64%)
+    const bassThump = 1 + features.bass * 0.5;
 
-    // Amplitude affects all blobs (additional pulse, 50% boost)
-    const amplitudeBoost = 1 + features.amplitude * 0.5;
+    // Amplitude affects all blobs (30% boost, was 40%)
+    const amplitudeBoost = 1 + features.amplitude * 0.3;
 
-    // Mids create per-blob wobble (different phase per blob, stronger)
-    const midWobble = 1 + features.mid * 0.35 * Math.sin(elapsedRef.current * 0.004 + index * 0.5);
+    // Mids create per-blob wobble (20%, was 28%)
+    const midWobble = 1 + features.mid * 0.2 * Math.sin(elapsedRef.current * 0.004 + index * 0.5);
 
     // BPM-synchronized beat pulse - blobs pulse in time with the music
     // Phase offset per blob creates subtle variation (not all pulse at exactly the same time)

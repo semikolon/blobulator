@@ -6,7 +6,21 @@ Audio-reactive metaball visualization engine with wavefront expansion animation,
 
 ## Current State (January 2026)
 
-**Working visualization** with unified intensity-based animation, BPM detection, and 6 enhancement phases complete.
+**Working visualization** with unified intensity-based animation, BPM detection, and 7 enhancement phases complete.
+
+### v6 - Drift-Mode Physics & BPM Curl Modulation (January 27, 2026)
+
+**Smoother drift-to-expansion spectrum:**
+
+1. **Center gravity scales with drift mode** - `gravityStrength = base * (0.5 + driftFactor * 1.5)`. Quiet→2x gravity (keeps blobs clustered), loud→0.5x (lets them expand freely). Drift/expansion is continuous spectrum via intensity.
+
+2. **BPM modulates curl noise scale** (confidence-gated) - Higher BPM = lower `curlScale` = broader sweeping curves (vs tight swirls). Only applies when `bpmConfidence > 0.5` to avoid jitter from unreliable detection.
+
+**Audio-driven curl parameters (existing, documented):**
+- Mids → `curlLerpFactor`: snappier flow field response
+- Treble → `curlTimeEvolution`: faster field changes
+- Bass → `curlScale`: broader sweeping curves
+- BPM → `curlScale`: broader sweeping at high tempos (NEW)
 
 ### v5 - Dynamic Population & UI Polish (January 25, 2026)
 

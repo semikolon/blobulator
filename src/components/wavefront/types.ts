@@ -47,7 +47,7 @@ export interface BlobFieldConfig {
 export const DEFAULT_CONFIG: BlobFieldConfig = {
   baseSpeed: 2,
   accelerationFactor: 3.0,        // Speed multiplier per generation
-  baseBlobSize: 18,               // SMALL blobs for metaball merging!
+  baseBlobSize: 14,               // Smaller blobs for more separation (was 18)
   shrinkFactor: 0.92,             // Slower shrink = more visible generations
   spawnIntervalMs: 300,           // Balance action vs CPU load
   spawnCountRange: [2, 3],        // MORE blobs per spawn
