@@ -664,12 +664,15 @@ export function Blobulator({ audio }: BlobulatorProps) {
       const bpmScaleInfluence = bpmConfidence > 0.5
         ? 1 - bpmNormalized * 0.4  // 1.0 at low BPM → 0.6 at high BPM (trusted)
         : 1;                        // No influence if BPM unreliable
-      // Slow time variation: 2-minute cycle (0.0000523 rad/ms), ±10-15% modulation
-      // Different phase offsets so parameters don't all peak together
+      // Slow time variation: different cycles for organic evolution
+      // - curlScale: 2-min cycle ±10% (broad movement patterns)
+      // - curlLerpFactor: 1-min cycle ±20% (how quickly blobs respond to flow)
+      // - curlTimeEvolution: 2-min cycle ±25% (how fast the flow field itself changes)
       const twoMinCycle = elapsedRef.current * 0.0000523; // 2π / 120000ms
-      const timeVarScale = 1 + Math.sin(twoMinCycle) * 0.10;              // ±10%
-      const timeVarLerp = 1 + Math.sin(twoMinCycle + 2.1) * 0.15;         // ±15%, phase offset
-      const timeVarEvolution = 1 + Math.sin(twoMinCycle + 4.2) * 0.12;    // ±12%, different offset
+      const oneMinCycle = elapsedRef.current * 0.0001047; // 2π / 60000ms
+      const timeVarScale = 1 + Math.sin(twoMinCycle) * 0.10;              // ±10% over 2 min
+      const timeVarLerp = 1 + Math.sin(oneMinCycle + 1.5) * 0.20;         // ±20% over 1 min
+      const timeVarEvolution = 1 + Math.sin(twoMinCycle + 4.2) * 0.25;    // ±25% over 2 min
       const dynamicConfig = {
         ...config,
         curlLerpFactor: (0.01 + features.mid * 0.07) * timeVarLerp,      // 0.01 → 0.08 (snappier with mids)
