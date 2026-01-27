@@ -36,8 +36,8 @@ const CLUSTERS = [
 const BG_BLOB_COUNT = 25;                // Fewer blobs in background
 const BG_SIZE_MULTIPLIER = 2.5;          // 2.5x larger than foreground
 const BG_SIZE_VARIATION = 0.6;           // ±60% size variation for variety
-const BG_SPEED_MULTIPLIER = 0.25;        // 4x slower than foreground
-const BG_LIGHTNESS_OFFSET = -27;         // 27% darker than foreground colors
+const BG_SPEED_MULTIPLIER = 0.4;         // 2.5x slower than foreground
+const BG_LIGHTNESS_OFFSET = -10;         // 10% darker than foreground colors
 const BG_SATURATION_OFFSET = -15;        // Less saturated (muted)
 // const BG_DIRECTION_OFFSET = Math.PI;  // No longer used - orbital motion instead
 const BG_GOOEY_BLUR = 24;                // Larger blur for softer edges
@@ -119,7 +119,7 @@ const SPATIAL_HASH_MIN_BLOBS = 50;    // Below this, O(n²) is faster than hash 
 
 // Counter-rotation configuration - layers swirl opposite directions at high intensity
 const ROTATION_INTENSITY_THRESHOLD = 0.42;  // Intensity above this = "high"
-const ROTATION_ACTIVATION_SECONDS = 10;     // Sustained high intensity before rotation starts
+const ROTATION_ACTIVATION_SECONDS = 5;      // Sustained high intensity before rotation starts
 const ROTATION_MAX_SPEED = 0.00025;         // Max rotation rad/ms at full intensity
 const ROTATION_RAMP_SECONDS = 25;           // Base ramp time (scales with intensity)
 const ROTATION_OUTER_MULTIPLIER = 2.5;      // Outer blobs rotate 2.5x faster
