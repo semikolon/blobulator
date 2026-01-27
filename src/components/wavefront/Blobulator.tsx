@@ -1517,7 +1517,7 @@ export function Blobulator({ audio }: BlobulatorProps) {
   // More purple/saturated to match the dark background blob field
   const bgLightness = 16 + bpmNormalized * 4 + inertiaIntensity * 3;  // 16-23% base
   const bgSaturation = 45 + inertiaIntensity * 10; // 45-55% saturation - richer purple
-  const centerLightness = Math.max(10, bgLightness - 4); // Center is 4% darker
+  const centerLightness = Math.max(8, bgLightness - 7); // Center is 7% darker
   const edgeColor = `hsl(270, ${Math.min(55, bgSaturation)}%, ${Math.min(24, bgLightness)}%)`;
   const centerColor = `hsl(270, ${Math.min(55, bgSaturation + 5)}%, ${Math.min(20, centerLightness)}%)`;
   const backgroundGradient = `radial-gradient(ellipse at center, ${centerColor} 0%, ${edgeColor} 100%)`;
