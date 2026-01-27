@@ -120,9 +120,9 @@ const SPATIAL_HASH_MIN_BLOBS = 50;    // Below this, O(n²) is faster than hash 
 // Counter-rotation configuration - layers swirl opposite directions at high intensity
 const ROTATION_INTENSITY_THRESHOLD = 0.55;  // Intensity above this = "high"
 const ROTATION_ACTIVATION_SECONDS = 10;     // Sustained high intensity before rotation starts
-const ROTATION_MAX_SPEED = 0.0004;          // Max rotation rad/ms at full ramp
-const ROTATION_RAMP_SECONDS = 60;           // Time to reach max speed (builds over 1 min)
-const ROTATION_OUTER_MULTIPLIER = 1.8;      // Outer blobs rotate 1.8x faster
+const ROTATION_MAX_SPEED = 0.0005;          // Max rotation rad/ms at full ramp
+const ROTATION_RAMP_SECONDS = 35;           // Time to reach max speed (faster ramp)
+const ROTATION_OUTER_MULTIPLIER = 2.5;      // Outer blobs rotate 2.5x faster
 const ROTATION_HISTORY_MS = 60000;          // Track intensity over 1 minute
 
 // Debug flash indicators - visual debugging for correlating jerks to code events
