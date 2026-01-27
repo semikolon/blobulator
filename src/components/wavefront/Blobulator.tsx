@@ -629,6 +629,12 @@ export function Blobulator({ audio }: BlobulatorProps) {
     rotationSpeedRef.current += (targetRotationSpeed - rotationSpeedRef.current) * 0.02;
     const rotationSpeed = rotationSpeedRef.current;
 
+    // Fraction of blobs that rotate: 20% at threshold → 50% at max intensity
+    const intensityExcessForFraction = avgIntensity > ROTATION_INTENSITY_THRESHOLD
+      ? Math.min(1, (avgIntensity - ROTATION_INTENSITY_THRESHOLD) / (1 - ROTATION_INTENSITY_THRESHOLD))
+      : 0;
+    const rotationBlobFraction = 0.2 + intensityExcessForFraction * 0.3; // 0.2 → 0.5
+
     // Initialize seeding start time on first frame
     if (seedingStartTimeRef.current === 0) {
       seedingStartTimeRef.current = now;
@@ -797,8 +803,9 @@ export function Blobulator({ audio }: BlobulatorProps) {
         blob.age += 1;  // Age used for influence calculations
 
         // === COUNTER-ROTATION (foreground = clockwise) ===
-        // Only applies when rotationSpeed > 0 (sustained high intensity)
-        if (rotationSpeed > 0.00001) {
+        // Only applies to a fraction of blobs (20-50% based on intensity)
+        const blobRotationIndex = (i / updatedBlobs.length);
+        if (rotationSpeed > 0.00001 && blobRotationIndex < rotationBlobFraction) {
           // Distance from center determines rotation speed (outer = faster)
           const distFromCenter = Math.sqrt(blob.x * blob.x + blob.y * blob.y);
           const maxDist = Math.max(viewport.width, viewport.height) / 2;
@@ -1172,7 +1179,9 @@ export function Blobulator({ audio }: BlobulatorProps) {
         blob.y = blob.anchorY + Math.sin(blob.orbitPhase) * effectiveRadius * blob.orbitEccentricity;
 
         // === COUNTER-ROTATION (background = counter-clockwise, opposite to foreground) ===
-        if (rotationSpeed > 0.00001) {
+        // Only applies to a fraction of blobs (20-50% based on intensity)
+        const bgBlobRotationIndex = (i / updatedBgBlobs.length);
+        if (rotationSpeed > 0.00001 && bgBlobRotationIndex < rotationBlobFraction) {
           const distFromCenter = Math.sqrt(blob.x * blob.x + blob.y * blob.y);
           const maxDist = Math.max(viewport.width, viewport.height) / 2;
           const distFactor = 0.5 + (distFromCenter / maxDist) * (ROTATION_OUTER_MULTIPLIER - 0.5);
