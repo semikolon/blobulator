@@ -1503,7 +1503,7 @@ export function Blobulator({ audio }: BlobulatorProps) {
     // Shift hue toward base background (270°) for better integration
     // This makes bg blobs feel more cohesive with the purple base
     const bgBaseHue = 270;
-    const hueBlend = 0.5; // 50% blend toward background purple
+    const hueBlend = 0.75; // 75% blend toward background purple (avoids gray/green midtones)
     // Circular hue interpolation
     let hueDiff = bgBaseHue - hue;
     if (hueDiff > 180) hueDiff -= 360;
