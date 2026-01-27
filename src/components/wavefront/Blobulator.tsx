@@ -1513,14 +1513,9 @@ export function Blobulator({ audio }: BlobulatorProps) {
   const centerX = viewport.width / 2;
   const centerY = viewport.height / 2;
 
-  // Dynamic background with radial gradient - darker center, lighter edges
-  // More purple/saturated to match the dark background blob field
-  const bgLightness = 16 + bpmNormalized * 4 + inertiaIntensity * 3;  // 16-23% base
-  const bgSaturation = 45 + inertiaIntensity * 10; // 45-55% saturation - richer purple
-  const centerLightness = Math.max(8, bgLightness - 7); // Center is 7% darker
-  const edgeColor = `hsl(270, ${Math.min(55, bgSaturation)}%, ${Math.min(24, bgLightness)}%)`;
-  const centerColor = `hsl(270, ${Math.min(55, bgSaturation + 5)}%, ${Math.min(20, centerLightness)}%)`;
-  const backgroundGradient = `radial-gradient(ellipse at center, ${centerColor} 0%, ${edgeColor} 100%)`;
+  // Static background with radial gradient - darker center, lighter edges
+  // Fixed at darkest values for consistent look
+  const backgroundGradient = `radial-gradient(ellipse at center, hsl(270, 50%, 9%) 0%, hsl(270, 45%, 16%) 100%)`;
 
   // Current time for calculating debug flash visibility
   const now = performance.now();
