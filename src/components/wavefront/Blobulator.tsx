@@ -471,6 +471,13 @@ export function Blobulator({ audio }: BlobulatorProps) {
   // Display time (updated once per second to avoid excessive re-renders)
   const [displayTime, setDisplayTime] = useState(0);
 
+  // Rotation metrics for display (updated periodically)
+  const [rotationMetrics, setRotationMetrics] = useState({
+    avgIntensity: 0,
+    sustainedSeconds: 0,
+    rotationPercent: 0,
+  });
+
   // BPM normalized to 0-1 scale (changes slowly, good for color/style blending)
   // Low BPM (70) = 0 (calm), High BPM (150) = 1 (energetic)
   const bpmNormalized = Math.max(0, Math.min(1, (bpm - BPM_MIN) / (BPM_MAX - BPM_MIN)));
@@ -683,11 +690,20 @@ export function Blobulator({ audio }: BlobulatorProps) {
       }
     }
 
-    // Update display time once per second
+    // Update display time and rotation metrics once per second
     const currentSecond = Math.floor(elapsedRef.current / 1000);
     if (currentSecond !== lastDisplayUpdateRef.current) {
       lastDisplayUpdateRef.current = currentSecond;
       setDisplayTime(currentSecond);
+      // Update rotation metrics for display
+      const sustainedSecs = sustainedHighStartRef.current !== null
+        ? (now - sustainedHighStartRef.current) / 1000
+        : 0;
+      setRotationMetrics({
+        avgIntensity: avgIntensity,
+        sustainedSeconds: sustainedSecs,
+        rotationPercent: (rotationSpeed / ROTATION_MAX_SPEED) * 100,
+      });
     }
 
     setBlobs(currentBlobs => {
@@ -1583,6 +1599,12 @@ export function Blobulator({ audio }: BlobulatorProps) {
             </p>
             <p style={{ ...styles.stats, fontSize: 10, marginTop: 2 }}>
               Intensity: {(intensity * 100).toFixed(0)}% | Inertia: {(inertiaIntensity * 100).toFixed(0)}% | Vol: {(energyVolatility * 1000).toFixed(1)}
+            </p>
+            <p style={{ ...styles.stats, fontSize: 10, marginTop: 2 }}>
+              {rotationMetrics.rotationPercent > 0.1 ? '🌀 ' : ''}
+              Avg: {(rotationMetrics.avgIntensity * 100).toFixed(0)}% |
+              Sustained: {rotationMetrics.sustainedSeconds.toFixed(0)}s |
+              Swirl: {rotationMetrics.rotationPercent.toFixed(0)}%
             </p>
           </>
         )}
