@@ -117,6 +117,14 @@ const FIXED_CENTER_GRAVITY = 0.000008; // Fixed center pull (stronger when dynam
 const SPATIAL_HASH_CELL_SIZE = 100;   // Must be >= BLOB_INFLUENCE_RADIUS (80px)
 const SPATIAL_HASH_MIN_BLOBS = 50;    // Below this, O(n²) is faster than hash overhead
 
+// Counter-rotation configuration - layers swirl opposite directions at high intensity
+const ROTATION_INTENSITY_THRESHOLD = 0.55;  // Intensity above this = "high"
+const ROTATION_ACTIVATION_SECONDS = 10;     // Sustained high intensity before rotation starts
+const ROTATION_MAX_SPEED = 0.0004;          // Max rotation rad/ms at full ramp
+const ROTATION_RAMP_SECONDS = 60;           // Time to reach max speed (builds over 1 min)
+const ROTATION_OUTER_MULTIPLIER = 1.8;      // Outer blobs rotate 1.8x faster
+const ROTATION_HISTORY_MS = 60000;          // Track intensity over 1 minute
+
 // Debug flash indicators - visual debugging for correlating jerks to code events
 const DEBUG_FLASH_ENABLED = false;    // Set to true to show debug indicators
 const DEBUG_FLASH_DURATION_MS = 150;  // How long each flash lasts
@@ -452,6 +460,14 @@ export function Blobulator({ audio }: BlobulatorProps) {
   // Force re-render when flashes change (for visual update) - not actively used but kept for potential future use
   const [debugFlashTrigger] = useState(0);
 
+  // Counter-rotation tracking - swirl layers opposite directions at sustained high intensity
+  // Rolling window of intensity values over 1 minute for averaging
+  const intensityHistoryRef = useRef<Array<{ time: number; value: number }>>([]);
+  // When sustained high intensity started (null = not currently high)
+  const sustainedHighStartRef = useRef<number | null>(null);
+  // Current rotation speed (lerped smoothly)
+  const rotationSpeedRef = useRef<number>(0);
+
   // Display time (updated once per second to avoid excessive re-renders)
   const [displayTime, setDisplayTime] = useState(0);
 
@@ -563,6 +579,43 @@ export function Blobulator({ audio }: BlobulatorProps) {
     // Refs are mutated here, not inside the state update callback
 
     const now = performance.now();
+
+    // ===== COUNTER-ROTATION TRACKING =====
+    // Update intensity history (rolling 1-minute window)
+    intensityHistoryRef.current.push({ time: now, value: intensity });
+    // Prune old entries
+    const cutoffTime = now - ROTATION_HISTORY_MS;
+    intensityHistoryRef.current = intensityHistoryRef.current.filter(e => e.time > cutoffTime);
+    // Calculate rolling average
+    const avgIntensity = intensityHistoryRef.current.length > 0
+      ? intensityHistoryRef.current.reduce((sum, e) => sum + e.value, 0) / intensityHistoryRef.current.length
+      : 0;
+
+    // Track sustained high intensity
+    if (avgIntensity >= ROTATION_INTENSITY_THRESHOLD) {
+      // Start tracking if not already
+      if (sustainedHighStartRef.current === null) {
+        sustainedHighStartRef.current = now;
+      }
+    } else {
+      // Reset if intensity drops
+      sustainedHighStartRef.current = null;
+    }
+
+    // Calculate rotation speed based on sustained duration
+    let targetRotationSpeed = 0;
+    if (sustainedHighStartRef.current !== null) {
+      const sustainedSeconds = (now - sustainedHighStartRef.current) / 1000;
+      if (sustainedSeconds >= ROTATION_ACTIVATION_SECONDS) {
+        // Ramp up over ROTATION_RAMP_SECONDS after activation
+        const rampProgress = Math.min(1, (sustainedSeconds - ROTATION_ACTIVATION_SECONDS) / ROTATION_RAMP_SECONDS);
+        // Ease-in curve for gradual start
+        targetRotationSpeed = ROTATION_MAX_SPEED * rampProgress * rampProgress;
+      }
+    }
+    // Smooth lerp toward target (prevents jarring changes)
+    rotationSpeedRef.current += (targetRotationSpeed - rotationSpeedRef.current) * 0.02;
+    const rotationSpeed = rotationSpeedRef.current;
 
     // Initialize seeding start time on first frame
     if (seedingStartTimeRef.current === 0) {
@@ -721,6 +774,21 @@ export function Blobulator({ audio }: BlobulatorProps) {
         blob.x += driftX + blob.vx * expansionFactor;
         blob.y += driftY + blob.vy * expansionFactor;
         blob.age += 1;  // Age used for influence calculations
+
+        // === COUNTER-ROTATION (foreground = clockwise) ===
+        // Only applies when rotationSpeed > 0 (sustained high intensity)
+        if (rotationSpeed > 0.00001) {
+          // Distance from center determines rotation speed (outer = faster)
+          const distFromCenter = Math.sqrt(blob.x * blob.x + blob.y * blob.y);
+          const maxDist = Math.max(viewport.width, viewport.height) / 2;
+          const distFactor = 0.5 + (distFromCenter / maxDist) * (ROTATION_OUTER_MULTIPLIER - 0.5);
+          // Tangential velocity: perpendicular to radius, clockwise (negative)
+          const angle = Math.atan2(blob.y, blob.x);
+          const tangentX = -Math.sin(angle) * rotationSpeed * distFactor * deltaMs * distFromCenter;
+          const tangentY = Math.cos(angle) * rotationSpeed * distFactor * deltaMs * distFromCenter;
+          blob.x += tangentX;
+          blob.y += tangentY;
+        }
 
         // Gradual direction evolution (swirling effect, always present)
         const curlAngle = Math.sin(elapsedRef.current * 0.0002 + phaseOffset) * Math.PI * 0.15;
@@ -1081,6 +1149,19 @@ export function Blobulator({ audio }: BlobulatorProps) {
         const effectiveRadius = blob.orbitRadius * radiusModulation;
         blob.x = blob.anchorX + Math.cos(blob.orbitPhase) * effectiveRadius;
         blob.y = blob.anchorY + Math.sin(blob.orbitPhase) * effectiveRadius * blob.orbitEccentricity;
+
+        // === COUNTER-ROTATION (background = counter-clockwise, opposite to foreground) ===
+        if (rotationSpeed > 0.00001) {
+          const distFromCenter = Math.sqrt(blob.x * blob.x + blob.y * blob.y);
+          const maxDist = Math.max(viewport.width, viewport.height) / 2;
+          const distFactor = 0.5 + (distFromCenter / maxDist) * (ROTATION_OUTER_MULTIPLIER - 0.5);
+          // Tangential velocity: counter-clockwise (positive, opposite to foreground)
+          const angle = Math.atan2(blob.y, blob.x);
+          const tangentX = Math.sin(angle) * rotationSpeed * distFactor * deltaMs * distFromCenter;
+          const tangentY = -Math.cos(angle) * rotationSpeed * distFactor * deltaMs * distFromCenter;
+          blob.x += tangentX;
+          blob.y += tangentY;
+        }
       }
 
       return updatedBgBlobs;
