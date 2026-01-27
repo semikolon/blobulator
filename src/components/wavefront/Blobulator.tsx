@@ -120,8 +120,8 @@ const SPATIAL_HASH_MIN_BLOBS = 50;    // Below this, O(n²) is faster than hash 
 // Counter-rotation configuration - layers swirl opposite directions at high intensity
 const ROTATION_INTENSITY_THRESHOLD = 0.55;  // Intensity above this = "high"
 const ROTATION_ACTIVATION_SECONDS = 10;     // Sustained high intensity before rotation starts
-const ROTATION_MAX_SPEED = 0.0005;          // Max rotation rad/ms at full ramp
-const ROTATION_RAMP_SECONDS = 18;           // Time to reach max speed (quick ramp)
+const ROTATION_MAX_SPEED = 0.00025;         // Max rotation rad/ms at full intensity
+const ROTATION_RAMP_SECONDS = 25;           // Base ramp time (scales with intensity)
 const ROTATION_OUTER_MULTIPLIER = 2.5;      // Outer blobs rotate 2.5x faster
 const ROTATION_HISTORY_MS = 60000;          // Track intensity over 1 minute
 
@@ -609,15 +609,20 @@ export function Blobulator({ audio }: BlobulatorProps) {
       sustainedHighStartRef.current = null;
     }
 
-    // Calculate rotation speed based on sustained duration
+    // Calculate rotation speed - SPECTRUM based on intensity level
+    // Higher intensity = faster rotation AND faster ramp
     let targetRotationSpeed = 0;
     if (sustainedHighStartRef.current !== null) {
       const sustainedSeconds = (now - sustainedHighStartRef.current) / 1000;
       if (sustainedSeconds >= ROTATION_ACTIVATION_SECONDS) {
-        // Ramp up over ROTATION_RAMP_SECONDS after activation
-        const rampProgress = Math.min(1, (sustainedSeconds - ROTATION_ACTIVATION_SECONDS) / ROTATION_RAMP_SECONDS);
-        // Ease-in curve for gradual start
-        targetRotationSpeed = ROTATION_MAX_SPEED * rampProgress * rampProgress;
+        // How much above threshold (0 at threshold, 1 at max intensity)
+        const intensityExcess = Math.min(1, (avgIntensity - ROTATION_INTENSITY_THRESHOLD) / (1 - ROTATION_INTENSITY_THRESHOLD));
+        // Ramp faster when intensity is higher (25s at threshold, 8s at max)
+        const effectiveRampTime = ROTATION_RAMP_SECONDS * (1 - intensityExcess * 0.7);
+        const rampProgress = Math.min(1, (sustainedSeconds - ROTATION_ACTIVATION_SECONDS) / effectiveRampTime);
+        // Target speed scales with intensity (subtle at threshold, full at max)
+        const intensityScale = 0.3 + intensityExcess * 0.7; // 30% at threshold, 100% at max
+        targetRotationSpeed = ROTATION_MAX_SPEED * rampProgress * rampProgress * intensityScale;
       }
     }
     // Smooth lerp toward target (prevents jarring changes)
