@@ -209,7 +209,7 @@ const styles = {
     position: 'fixed' as const,
     inset: 0,
     overflow: 'hidden',
-    transition: 'background-color 0.8s ease',
+    transition: 'background 0.8s ease',
   },
   controlPanel: {
     position: 'absolute' as const,
@@ -1513,12 +1513,14 @@ export function Blobulator({ audio }: BlobulatorProps) {
   const centerX = viewport.width / 2;
   const centerY = viewport.height / 2;
 
-  // Dynamic background color based on BPM + inertia intensity
-  // Sits between foreground blobs (bright) and background blobs (muted) for layered depth
-  // Higher lightness makes background blob layer more visible
-  const bgLightness = 18 + bpmNormalized * 5 + inertiaIntensity * 4;  // 18-27% - brighter to show bg blobs
-  const bgSaturation = 38 + inertiaIntensity * 12; // 38-50% saturation - more purple to match blobs
-  const backgroundColor = `hsl(275, ${Math.min(50, bgSaturation)}%, ${Math.min(28, bgLightness)}%)`;
+  // Dynamic background with radial gradient - darker center, lighter edges
+  // More purple/saturated to match the dark background blob field
+  const bgLightness = 16 + bpmNormalized * 4 + inertiaIntensity * 3;  // 16-23% base
+  const bgSaturation = 45 + inertiaIntensity * 10; // 45-55% saturation - richer purple
+  const centerLightness = Math.max(10, bgLightness - 4); // Center is 4% darker
+  const edgeColor = `hsl(270, ${Math.min(55, bgSaturation)}%, ${Math.min(24, bgLightness)}%)`;
+  const centerColor = `hsl(270, ${Math.min(55, bgSaturation + 5)}%, ${Math.min(20, centerLightness)}%)`;
+  const backgroundGradient = `radial-gradient(ellipse at center, ${centerColor} 0%, ${edgeColor} 100%)`;
 
   // Current time for calculating debug flash visibility
   const now = performance.now();
@@ -1526,7 +1528,7 @@ export function Blobulator({ audio }: BlobulatorProps) {
   void debugFlashTrigger;
 
   return (
-    <div style={{ ...styles.container, backgroundColor }} onClick={handleBackgroundClick}>
+    <div style={{ ...styles.container, background: backgroundGradient }} onClick={handleBackgroundClick}>
       {/* Debug flash indicators - fixed position slots for each event type */}
       {/* Each event always appears in the same slot for easy pattern recognition */}
       {DEBUG_FLASH_ENABLED && (
