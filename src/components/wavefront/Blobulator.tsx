@@ -1503,8 +1503,8 @@ export function Blobulator({ audio }: BlobulatorProps) {
   // Sits between foreground blobs (bright) and background blobs (muted) for layered depth
   // Higher lightness makes background blob layer more visible
   const bgLightness = 18 + bpmNormalized * 5 + inertiaIntensity * 4;  // 18-27% - brighter to show bg blobs
-  const bgSaturation = 25 + inertiaIntensity * 10; // 25-35% saturation for richer purple
-  const backgroundColor = `hsl(275, ${Math.min(40, bgSaturation)}%, ${Math.min(28, bgLightness)}%)`;
+  const bgSaturation = 38 + inertiaIntensity * 12; // 38-50% saturation - more purple to match blobs
+  const backgroundColor = `hsl(275, ${Math.min(50, bgSaturation)}%, ${Math.min(28, bgLightness)}%)`;
 
   // Current time for calculating debug flash visibility
   const now = performance.now();
