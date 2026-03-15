@@ -1,23 +1,22 @@
 <% require "dotenv"; Dotenv.load(".env") %>
 # Blobulator Kamal Deployment Configuration
-# Target: Dell Optiplex 7010 (blobulator.fredrikbranstrom.se, voidulator.fredrikbranstrom.se)
-# Architecture: nginx (SSL) → kamal-proxy → nginx container (static files)
+# Target: Dell Optiplex 7010 / Darwin (blobulator.fredrikbranstrom.se, voidulator.fredrikbranstrom.se)
+# Architecture: kamal-proxy (TLS/LE) → nginx container (static files)
 
 service: blobulator
 
 # Container image name
 image: blobulator
 
-# Deploy to Dell Optiplex
+# Deploy to Darwin (router at .1)
 servers:
   web:
     hosts:
-      - 213.164.219.201
+      - 192.168.4.1
 
-# Proxy configuration
-# SSL handled by external nginx on Dell
+# Proxy configuration — kamal-proxy handles TLS via Let's Encrypt
 proxy:
-  ssl: false
+  ssl: true
   host: blobulator.fredrikbranstrom.se,voidulator.fredrikbranstrom.se
   app_port: 80  # nginx inside container listens on 80
   forward_headers: true
@@ -28,15 +27,13 @@ registry:
   username: admin
   password: "<%= ENV['KNOT_REGISTRY_PASSWORD'] %>"
 
-# Builder configuration
-# Remote builder on Dell - native AMD64
+# Builder configuration — remote builder on Darwin, native AMD64
 builder:
   arch: amd64
-  remote: ssh://fredrik@213.164.219.201:2222
-  # cache disabled temporarily - buildkit auth issue
-  # cache:
-  #   type: registry
-  #   options: mode=max
+  remote: ssh://fredrik@192.168.4.1
+  cache:
+    type: registry
+    options: mode=max
 
 # Environment variables (minimal - just timezone)
 env:
@@ -46,7 +43,6 @@ env:
 # SSH configuration
 ssh:
   user: fredrik
-  port: 2222
 
 # Rolling deploy
 boot:
