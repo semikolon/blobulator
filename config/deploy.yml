@@ -1,4 +1,4 @@
-<% require "dotenv"; Dotenv.load(".env") %>
+<% require "dotenv"; Dotenv.overload(".env") %>
 # Blobulator Kamal Deployment Configuration
 # Target: Dell Optiplex 7010 / Darwin (blobulator.fredrikbranstrom.se, voidulator.fredrikbranstrom.se)
 # Architecture: kamal-proxy (TLS/LE) → nginx container (static files)
